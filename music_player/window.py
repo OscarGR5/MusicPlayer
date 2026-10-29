@@ -311,6 +311,9 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         # Discard move actions from a menu opened before the sort changed.
         self.lookup_action('playlist-up').set_enabled(False)
         self.lookup_action('playlist-down').set_enabled(False)
+        if self.sorted.get_n_items():
+            # Replace GTK's old-row scroll anchor without selecting or focusing it.
+            self.view.scroll_to(0, None, Gtk.ListScrollFlags(0), None)
 
     def _song_item(self, song):
         item = SongItem(song)
