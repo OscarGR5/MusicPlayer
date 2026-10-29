@@ -1,4 +1,5 @@
 from dataclasses import replace
+import os
 from pathlib import Path
 import shutil
 
@@ -6,7 +7,7 @@ import gi
 import pytest
 
 gi.require_version('Gtk', '4.0')
-from gi.repository import Gtk
+from gi.repository import Gio, GLib, Gtk
 
 from music_player.artwork import cache_artwork
 from music_player.audio import AudioPlayer
@@ -59,13 +60,18 @@ def test_player_icons_modes_volume_metadata_and_seeking(library, artwork, tmp_pa
             calls.append(value)
             return seek(value)
         monkeypatch.setattr(window.player, 'seek', record)
-        bar.begin_seek()
+        controllers = bar.progress.observe_controllers()
+        drags = [controllers.get_item(index) for index in range(controllers.get_n_items())
+                 if isinstance(controllers.get_item(index), Gtk.GestureDrag)]
+        observer = drags[0]
+        assert any(observer is not native and observer.is_grouped_with(native) for native in drags)
+        observer.emit('drag-begin', 0, 0)
         for value in (2, 3, 4):
             bar.progress.set_value(value)
         window.controller.tick()
         assert bar.progress.get_value() == 4
         assert calls == []
-        bar.finish_seek()
+        observer.emit('drag-end', 20, 0)
         wait_for(lambda: calls == [4] and not window.player.seeking)
         assert window.player.position == pytest.approx(4, abs=0.05)
         # Keyboard/wheel edits are debounced too.
@@ -73,6 +79,11 @@ def test_player_icons_modes_volume_metadata_and_seeking(library, artwork, tmp_pa
             bar.progress.set_value(value)
         wait_for(lambda: calls == [4, 6] and not window.player.seeking)
         assert window.player.position == pytest.approx(6, abs=0.05)
+        observer.emit('drag-begin', 0, 0)
+        bar.progress.set_value(8)
+        observer.emit('cancel', None)
+        assert not bar._dragging and bar._seek_source is None
+        assert calls == [4, 6]
         bar.update_progress()
         assert bar.elapsed.get_text() == '0:06'
         assert bar.total.get_text() == '0:12'
@@ -117,7 +128,7 @@ def test_central_actions_space_editable_guard_and_search_focus(library, monkeypa
         assert not window.shortcuts.space()
         assert window.controller.state == 'playing'
         assert window._search.get_text() == 'typing with spaces'
-        window.bar.play.grab_focus()
+        window.view.grab_focus()
         assert window.shortcuts.space()
         wait_for(lambda: window.controller.state == 'paused')
         window.activate_action('win.next', None)
@@ -135,6 +146,157 @@ def test_central_actions_space_editable_guard_and_search_focus(library, monkeypa
         assert window.get_application().get_accels_for_action('win.play-pause') == []
 
 
+def test_space_defers_to_focused_native_controls(library):
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        window.view.emit('activate', 0)
+        wait_for(lambda: window.controller.state == 'playing')
+        for button in (window.bar.play, window.bar.shuffle, window.bar.next,
+                       window.bar.repeat, window.bar.mute, window._rescan,
+                       window._create_playlist):
+            button.grab_focus()
+            assert not window.shortcuts.space(), button.get_tooltip_text()
+            assert window.controller.state == 'playing'
+        window.sidebar.select_row(window._statistics_row)
+        window.statistics.selector.grab_focus()
+        assert not window.shortcuts.space()
+
+
+@pytest.mark.parametrize('dragging', [False, True])
+@pytest.mark.parametrize('terminal', ['stop', 'error'])
+def test_pending_seek_is_cancelled_when_playback_ends(library, dragging, terminal):
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        window.view.emit('activate', 0)
+        wait_for(lambda: window.controller.state == 'playing')
+        bar = window.bar
+        if dragging:
+            bar.begin_seek()
+        bar.progress.set_value(4)
+        if terminal == 'stop':
+            window.controller.stop()
+        else:
+            window.player.stop()
+            window.controller._audio_event('error', 'Decoder failed')
+        assert not bar._dragging
+        assert bar._seek_source is None
+        assert not bar.progress.get_sensitive()
+        bar.finish_seek()
+        assert bar._seek_source is None
+
+
+def test_file_chooser_cancel_reopen_browse_and_play(library, tmp_path, long_wav_file):
+    import hashlib
+
+    # Browse outside the library, using a real chooser and a generated file.
+    folder = tmp_path / 'Other audio'
+    folder.mkdir()
+    audio = folder / 'local tone # café.wav'
+    shutil.copyfile(long_wav_file, audio)
+    before = (hashlib.sha256(audio.read_bytes()).digest(), audio.stat())
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        status = window._status.get_text()
+        window._open_file(None)
+        chooser = window._chooser
+        assert isinstance(chooser, Gtk.FileChooserDialog)
+        assert chooser.get_transient_for() is window
+        assert chooser.get_modal()
+        wait_for(chooser.get_mapped)
+        for _ in range(10):
+            window._open_file(None)
+            assert window._chooser is chooser
+        chooser.response(Gtk.ResponseType.CANCEL)
+        assert window._chooser is None
+        assert not chooser.get_visible()
+        assert window._status.get_text() == status
+        assert window.controller.current is None
+        window._open_file(None)
+        chooser = window._chooser
+        wait_for(chooser.get_mapped)
+        assert chooser.set_current_folder(Gio.File.new_for_path(str(folder)))
+        wait_for(lambda: chooser.get_current_folder() is not None and
+                 chooser.get_current_folder().get_path() == str(folder))
+        assert chooser.set_file(Gio.File.new_for_path(str(audio)))
+        wait_for(lambda: chooser.get_file() is not None and
+                 chooser.get_file().get_path() == str(audio))
+        chooser.response(Gtk.ResponseType.ACCEPT)
+        wait_for(lambda: window._chooser is None and window.controller.state == 'playing')
+        assert window.player.path == audio
+        assert window.controller.current_song_id is None  # external-file integration
+        after = (hashlib.sha256(audio.read_bytes()).digest(), audio.stat())
+        assert after[0] == before[0]
+        assert after[1].st_size == before[1].st_size
+        assert after[1].st_mtime_ns == before[1].st_mtime_ns
+
+
+@pytest.mark.parametrize('mapped', [False, True])
+def test_file_chooser_close_during_repeated_requests(library, mapped, monkeypatch):
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        window._open_file(None)
+        chooser = window._chooser
+        if mapped:
+            wait_for(chooser.get_mapped)
+        for _ in range(30):
+            window._open_file(None)
+            assert window._chooser is chooser
+        opened = []
+        monkeypatch.setattr(window.controller, 'open_file', opened.append)
+        window.close()
+        assert window._chooser is None
+        assert window._chooser_response_id is None
+        assert not chooser.get_visible()
+        window._file_response(chooser, Gtk.ResponseType.ACCEPT)
+        window._open_file(None)
+        assert window._chooser is None
+        assert not opened
+        assert not any(isinstance(item, Gtk.FileChooserDialog)
+                       for item in Gtk.Window.get_toplevels())
+
+
+def test_file_chooser_repeated_cancel_and_window_close(library):
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        for iteration in range(12):
+            window._open_file(None)
+            chooser = window._chooser
+            wait_for(chooser.get_mapped)
+            if iteration % 2:
+                chooser.close()
+            else:
+                chooser.response(Gtk.ResponseType.CANCEL)
+            wait_for(lambda: window._chooser is None)
+            assert not chooser.get_visible()
+        assert not any(isinstance(item, Gtk.FileChooserDialog)
+                       for item in Gtk.Window.get_toplevels())
+
+
+def test_file_chooser_errors_and_stale_responses(library, monkeypatch):
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        window._open_file(None)
+        old = window._chooser
+        old.response(Gtk.ResponseType.CANCEL)
+        window._open_file(None)
+        chooser = window._chooser
+        window._file_response(old, Gtk.ResponseType.CANCEL)
+        assert window._chooser is chooser
+        monkeypatch.setattr(chooser, 'get_file', lambda: Gio.File.new_for_uri('https://example.com/audio.wav'))
+        window._file_response(chooser, Gtk.ResponseType.ACCEPT)
+        assert 'Only local files' in window._status.get_text()
+        assert window._chooser is None
+        window._open_file(None)
+        chooser = window._chooser
+        monkeypatch.setattr(chooser, 'get_file', lambda: Gio.File.new_for_path(library[0].path))
+        def fail(_):
+            raise ValueError('Could not read audio')
+        monkeypatch.setattr(window.controller, 'open_file', fail)
+        window._file_response(chooser, Gtk.ResponseType.ACCEPT)
+        assert 'Could not read audio' in window._status.get_text()
+        assert window._chooser is None
+
+
 @pytest.mark.parametrize('size', [(1040, 640), (720, 480)])
 @pytest.mark.parametrize('dark', [False, True])
 def test_player_bar_stays_centered_and_inside_window(library, size, dark):
@@ -143,6 +305,13 @@ def test_player_bar_stays_centered_and_inside_window(library, size, dark):
     settings.set_property('gtk-application-prefer-dark-theme', dark)
     try:
         with open_window(size) as window:
+            wait_for(lambda: not window.scanner.running)
+            song = window.sorted.get_item(0).song
+            window.controller.activate([replace(song, title='A long track title ' * 20,
+                                                artist='A long artist name ' * 20,
+                                                album='A long album name ' * 20)])
+            wait_for(lambda: window.controller.state == 'playing')
+            window.controller.play_pause()
             wait_for(lambda: window.bar.get_width() > 0)
             bar = window.bar
             for child in (bar.cover, bar.title, bar.progress, bar.repeat, bar.volume, bar.mute):
@@ -150,8 +319,37 @@ def test_player_bar_stays_centered_and_inside_window(library, size, dark):
                 assert valid and bounds.get_width() > 0
                 assert bounds.get_x() >= -0.5
                 assert bounds.get_x() + bounds.get_width() <= bar.get_width() + 0.5
-            valid, center = bar.layout.get_center_widget().compute_bounds(bar)
+            valid, center = bar.layout.get_child_at(1, 0).compute_bounds(bar)
             assert valid
             assert center.get_x() + center.get_width() / 2 == pytest.approx(bar.get_width() / 2, abs=1)
+            _, left = bar.layout.get_child_at(0, 0).compute_bounds(bar)
+            _, right = bar.layout.get_child_at(3, 0).compute_bounds(bar)
+            assert left.get_x() + left.get_width() <= center.get_x() + 0.5
+            assert center.get_x() + center.get_width() <= right.get_x() + 0.5
+            assert bar.title.get_layout().is_ellipsized()
+            assert bar.artist.get_layout().is_ellipsized()
+            if size[0] == 1040:
+                assert 260 <= bar.progress.get_width() <= 320
+                assert 120 <= bar.volume.get_width() <= 150
+            else:
+                assert bar.progress.get_width() >= 130
+                assert bar.volume.get_width() >= 70
+            # Exercise the same seek and volume callbacks in every layout/theme.
+            bar.begin_seek()
+            bar.progress.set_value(4)
+            bar.finish_seek()
+            wait_for(lambda: not window.player.seeking and window.player.position == pytest.approx(4, abs=0.05))
+            bar.volume.set_value(37)
+            assert window.player.volume == pytest.approx(0.37)
+            bar.mute.emit('clicked')
+            assert window.player.muted
+            bar.mute.emit('clicked')
+            assert not window.player.muted
+            directory = os.environ.get('MUSICPLAYER_UI_CAPTURE_DIR')
+            if directory:
+                from test_statistics_ui import capture
+                target = Path(directory)
+                target.mkdir(parents=True, exist_ok=True)
+                capture(window, target / f'player-{size[0]}-{"dark" if dark else "light"}.png')
     finally:
         settings.set_property('gtk-application-prefer-dark-theme', previous)

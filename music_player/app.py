@@ -21,6 +21,8 @@ class MusicPlayerApplication(Gtk.Application):
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
+        # This process-wide GTK preference also covers application-owned dialogs.
+        Gtk.Settings.get_default().set_property('gtk-application-prefer-dark-theme', True)
         Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_search_path(str(Path(__file__).parent / 'assets'))
         Gtk.Window.set_default_icon_name(DESKTOP_ENTRY)
 

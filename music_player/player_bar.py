@@ -3,9 +3,25 @@
 import gi
 
 gi.require_version('Gtk', '4.0')
-from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
 from .song_model import format_duration, thumbnail_texture
+
+
+class _PlayerScale(Gtk.Scale):
+    """Prefer a longer trough while allowing GTK to shrink it at narrow widths."""
+
+    def __init__(self, maximum, step, natural_width):
+        self._natural_width = natural_width
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL,
+                         adjustment=Gtk.Adjustment(lower=0, upper=maximum, step_increment=step,
+                                                   page_increment=step * 10), draw_value=False)
+
+    def do_measure(self, orientation, for_size):
+        minimum, natural, _, _ = Gtk.Scale.do_measure(self, orientation, for_size)
+        if orientation == Gtk.Orientation.HORIZONTAL:
+            natural = max(minimum, self._natural_width)
+        return minimum, natural, -1, -1
 
 
 class PlayerBar(Gtk.Box):
@@ -17,7 +33,8 @@ class PlayerBar(Gtk.Box):
         self._seek_source = None
         for side in ('top', 'bottom', 'start', 'end'):
             getattr(self, f'set_margin_{side}')(10)
-        self.layout = Gtk.CenterBox(hexpand=True)
+        # Equal outer columns keep playback centered even with long metadata.
+        self.layout = Gtk.Grid(column_homogeneous=True, hexpand=True)
         self.append(self.layout)
         left = Gtk.Box(spacing=10, hexpand=True)
         self.cover = Gtk.Image(pixel_size=40)
@@ -36,9 +53,10 @@ class PlayerBar(Gtk.Box):
         for label in (self.title, self.artist, self.status):
             details.append(label)
         left.append(details)
-        self.layout.set_start_widget(left)
+        self.layout.attach(left, 0, 0, 1, 1)
 
-        center = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER, hexpand=False)
+        center = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
+                         valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
         center.set_size_request(260, -1)
         controls = Gtk.Box(spacing=4, halign=Gtk.Align.CENTER)
         self.shuffle = self._button('media-playlist-shuffle-symbolic', 'Shuffle off', controller.toggle_shuffle, True)
@@ -52,34 +70,40 @@ class PlayerBar(Gtk.Box):
         timeline = Gtk.Box(spacing=4)
         self.elapsed = Gtk.Label(label='0:00', width_chars=5, xalign=1)
         self.total = Gtk.Label(label='-:--', width_chars=5, xalign=0)
-        self.progress = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 1, 0.1)
-        self.progress.set_draw_value(False)
+        self.progress = _PlayerScale(1, 0.1, 300)
         self.progress.set_hexpand(True)
         self.progress.set_size_request(130, -1)
         self.progress.set_tooltip_text('Playback position')
         self.progress.update_property([Gtk.AccessibleProperty.LABEL], ['Playback position'])
         self.progress.connect('value-changed', self._progress_changed)
         # Observe press/release without taking the scale's own drag gesture away.
-        pointer = Gtk.EventControllerLegacy.new()
-        pointer.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        pointer.connect('event', self._pointer_event)
+        pointer = Gtk.GestureDrag.new()
+        pointer.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
+        pointer.connect('drag-begin', lambda *_: self.begin_seek())
+        pointer.connect('drag-end', lambda *_: self.finish_seek())
+        pointer.connect('cancel', lambda *_: self.cancel_seek())
         self.progress.add_controller(pointer)
+        # Share the scale's native drag sequence so it cannot deny our release.
+        controllers = self.progress.observe_controllers()
+        for index in range(controllers.get_n_items()):
+            native = controllers.get_item(index)
+            if isinstance(native, Gtk.GestureDrag) and native is not pointer:
+                pointer.group(native)
         for child in (self.elapsed, self.progress, self.total):
             timeline.append(child)
         center.append(timeline)
-        self.layout.set_center_widget(center)
+        self.layout.attach(center, 1, 0, 2, 1)
 
-        right = Gtk.Box(spacing=4, valign=Gtk.Align.CENTER)
+        right = Gtk.Box(spacing=4, valign=Gtk.Align.CENTER, halign=Gtk.Align.END)
         self.mute = self._button('audio-volume-high-symbolic', 'Mute (Ctrl+M)', controller.toggle_mute)
         right.append(self.mute)
-        self.volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
-        self.volume.set_draw_value(False)
+        self.volume = _PlayerScale(100, 1, 140)
         self.volume.set_size_request(70, -1)
         self.volume.set_tooltip_text('Volume')
         self.volume.update_property([Gtk.AccessibleProperty.LABEL], ['Volume'])
         self.volume.connect('value-changed', self._volume_changed)
         right.append(self.volume)
-        self.layout.set_end_widget(right)
+        self.layout.attach(right, 3, 0, 1, 1)
         self.update('track')
         self.update('modes')
         self.update('volume')
@@ -99,6 +123,8 @@ class PlayerBar(Gtk.Box):
 
     def update(self, event):
         controller = self.controller
+        if event == 'state' and controller.state in ('stopped', 'error', 'eos'):
+            self.cancel_seek()
         if event == 'track':
             self.cancel_seek()
             song = controller.current
@@ -166,14 +192,6 @@ class PlayerBar(Gtk.Box):
         if self._dragging:
             self._dragging = False
             self._schedule_seek(1)
-
-    def _pointer_event(self, controller, event):
-        kind = event.get_event_type()
-        if kind in (Gdk.EventType.BUTTON_PRESS, Gdk.EventType.TOUCH_BEGIN):
-            self.begin_seek()
-        elif kind in (Gdk.EventType.BUTTON_RELEASE, Gdk.EventType.TOUCH_END, Gdk.EventType.TOUCH_CANCEL):
-            self.finish_seek()
-        return False
 
     def _progress_changed(self, scale):
         if self._updating:

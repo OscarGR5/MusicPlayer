@@ -29,7 +29,7 @@ class StatisticsIcon(Gtk.DrawingArea):
         self.set_draw_func(self._draw)
 
     def _draw(self, area, context, width, height):
-        color = self.get_style_context().get_color()
+        color = self.get_color()
         context.set_source_rgba(color.red, color.green, color.blue, color.alpha)
         for x, y, h in ((1, 9, 6), (6, 5, 10), (11, 1, 14)):
             context.rectangle(x, y, 3, h)
@@ -51,7 +51,7 @@ class ActivityChart(Gtk.DrawingArea):
     def _draw(self, area, context, width, height):
         if not self.values:
             return
-        color = self.get_style_context().get_color()
+        color = self.get_color()
         context.set_source_rgba(color.red, color.green, color.blue, color.alpha)
         context.select_font_face('Sans')
         context.set_font_size(11)

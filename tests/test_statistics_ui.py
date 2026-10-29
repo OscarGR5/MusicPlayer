@@ -216,8 +216,21 @@ def test_layout_themes_and_scroll_player(library, size, dark):
             wait_for(lambda: not window.scanner.running)
             seed(window, library)
             page = enter(window)
-            wait_for(lambda: page.get_width() > 0 and window.get_width() == size[0])
-            assert window.get_height() == size[1]
+            # get_width/get_height exclude CSS borders. GTK 4.14's window
+            # theme has a 5 px border, so compare the window's drawing bounds.
+            try:
+                wait_for(lambda: page.get_width() > 0 and
+                         window.compute_bounds(window)[1].get_width() == size[0])
+            except AssertionError:
+                _, bounds = window.compute_bounds(window)
+                raise AssertionError(
+                    f'Requested {size}, window bounds '
+                    f'{bounds.get_width()}x{bounds.get_height()}, content '
+                    f'{window.get_child().get_width()}x{window.get_child().get_height()}, '
+                    f'titlebar {window.get_titlebar().get_height()}'
+                ) from None
+            valid, bounds = window.compute_bounds(window)
+            assert valid and bounds.get_height() == size[1]
             assert page.get_hadjustment().get_upper() <= page.get_width()
             assert page.get_vadjustment().get_upper() > page.get_height()
             assert window.bar.get_mapped()

@@ -10,7 +10,18 @@ from test_audio import wait_for
 
 
 @pytest.mark.skipif(not Gtk.init_check(), reason="No graphical display available")
-def test_window_startup_reactivation_and_close(wav_file, monkeypatch):
+def test_window_startup_reactivation_and_close(long_wav_file, monkeypatch, request):
+    settings = Gtk.Settings.get_default()
+    original = settings.get_property('gtk-application-prefer-dark-theme')
+    request.addfinalizer(lambda: settings.set_property('gtk-application-prefer-dark-theme', original))
+    settings.set_property('gtk-application-prefer-dark-theme', False)
+    from music_player.window import MusicPlayerWindow
+
+    def create_window(application):
+        assert settings.get_property('gtk-application-prefer-dark-theme')
+        return MusicPlayerWindow(application)
+
+    monkeypatch.setattr('music_player.app.MusicPlayerWindow', create_window)
     app = MusicPlayerApplication()
     app.set_application_id("io.github.OscarGR5.MusicPlayer.Tests")
     failures = []
@@ -30,7 +41,10 @@ def test_window_startup_reactivation_and_close(wav_file, monkeypatch):
             assert Gtk.Window.get_default_icon_name() == 'io.github.OscarGR5.MusicPlayer'
             from gi.repository import Gdk
             assert Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).has_icon('io.github.OscarGR5.MusicPlayer')
-            window.player.load(wav_file)
+            sink = Gst.ElementFactory.make('fakesink')
+            sink.set_property('sync', True)
+            window.player.pipeline.set_property('audio-sink', sink)
+            window.player.load(long_wav_file)
             window.player.play()
             wait_for(lambda: window._status.get_text() == "Playing")
             window.close()

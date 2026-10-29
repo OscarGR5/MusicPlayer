@@ -4,6 +4,11 @@ A lightweight native GTK4 music library and player for Fedora Linux. It plays
 local files through GStreamer, without accounts, streaming, a web server, or a
 browser process.
 
+Phase 7 release status: **hold for a GTK portal shutdown crash on Fedora 44
+GNOME/Wayland**. Closing while the native file chooser is still being presented
+can crash GTK 4.22.5. See [Release Verification](RELEASE_VERIFICATION.md) for the
+isolated reproducer, completed checks, and remaining desktop verification.
+
 ## Fedora setup
 
 Required system runtime packages:
@@ -12,7 +17,7 @@ Required system runtime packages:
 sudo dnf install python3 python3-gobject gtk4 gdk-pixbuf2 gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good python3-mutagen
 ```
 
-PyGObject, GTK4, GStreamer, and GdkPixbuf use Fedora's system packages. Do not
+PyGObject, GTK4 (4.10 or newer), GStreamer, and GdkPixbuf use Fedora's system packages. Do not
 compile PyGObject through pip. SQLite is included with Python. Mutagen is the
 only additional Python runtime dependency. Playback format support depends on
 your installed GStreamer decoders; unavailable decoders produce playback errors.
@@ -40,8 +45,7 @@ No pip installation of the project itself is needed to run from the checkout.
 
 ## Music library
 
-The first launch automatically scans `~/Music` (the initial folder is
-`/home/admin/Music` on the project owner's machine), including subdirectories.
+The first launch automatically scans `~/Music`, including subdirectories.
 Supported extensions are MP3, FLAC, M4A, Ogg/OGA, Opus, and WAV. Mutagen reads
 title, artist, album, duration, and embedded artwork. Untagged tracks use their
 filename as the title and show unknown artist/album values. Malformed or
@@ -98,12 +102,16 @@ Mute preserves that volume; unmuting restores it. Mute itself is not persisted.
 use their stable song ID; files outside the index are playable with metadata
 and cover art but are excluded from library statistics and are not imported.
 Closing the window cancels scanning, checkpoints history, stops audio, and exits.
-Styling follows the GTK light/dark theme. The player bar fits the 720-pixel
-minimum width; the library table can scroll horizontally in narrow windows.
+Normal launches prefer GTK's dark theme for the window and application-owned
+dialogs, independently of GNOME's appearance preference. No system settings are
+changed. The player bar keeps playback controls horizontally centered, with
+progress and volume sliders preferring about 300 and 140 pixels at a 1040-pixel
+window width. Both shrink at the 720-pixel minimum width, and long track details
+truncate; the library table can scroll horizontally in narrow windows.
 
 | Shortcut | Action |
 | --- | --- |
-| Space | Play/Pause, except while typing in an editable control |
+| Space | Play/Pause in the song view; focused buttons, menus, dropdowns, and text fields keep their native Space behavior |
 | Ctrl+Right | Next |
 | Ctrl+Left | Previous |
 | Ctrl+M | Mute/Unmute |
@@ -397,9 +405,9 @@ Or run `.venv/bin/python -m pytest -q` after the virtual environment setup above
 Tests use temporary databases, XDG directories, and generated audio. Optional
 MP3, FLAC, M4A, Ogg, and Opus fixture generation uses `ffmpeg` if available;
 otherwise those cases are explicitly skipped. No personal music is used by the
-automated tests. GTK tests are skipped without a graphical display. The Phase 1
-lifecycle regression plays a short quiet tone through the desktop output;
-other playback tests use synchronized fake sinks.
+automated tests. GTK tests are skipped without a graphical display. Playback
+tests, including application and launcher subprocesses, use synchronized fake
+sinks and do not require speakers or a running sound server.
 
 Coverage includes recursive discovery, tags and artwork for six formats,
 fallbacks, corruption, duplicate prevention, stable IDs, changed/deleted files,
@@ -433,6 +441,32 @@ relocation, uninstall, and original SVG rendering at 16–256 pixels. The test
 environment also needs Fedora's `dbus-run-session`, `gdbus`, and
 `desktop-file-validate` tools. These are test tools, not added application runtime
 dependencies. No test waits 30 seconds to qualify a play.
+
+Phase 7 adds regressions for pausing during buffering, cancelling pending seeks
+on Stop/error, preserving native Space behavior on focused controls, releasing
+retired table rows during playlist navigation, rapid pipeline switching,
+temporarily unreadable files, and agreement between history and statistics
+after pause/seek/replay/error/restart. Independent `gdbus` and `busctl` checks
+run on the isolated test bus.
+The deprecated native chooser entry point is replaced by GTK's asynchronous
+`FileDialog`; cancel/error/late-result handling is tested through callbacks.
+This API migration does not fix the host GTK portal shutdown crash.
+
+The Linux GitHub Actions workflow installs system GTK/GStreamer packages and
+runs the suite under Xvfb and a private D-Bus session on Ubuntu 24.04. It adds no
+runtime dependencies. A local headless equivalent, with Xvfb and the test
+packages installed, is:
+
+```sh
+xvfb-run -a dbus-run-session -- python3 -m pytest -q
+```
+
+Automated GTK callbacks and layout checks do not verify physical pointer or
+keyboard delivery. See [Release Verification](RELEASE_VERIFICATION.md) for the
+tested environment, resource measurements, remaining warnings, and the short
+desktop checklist. Physical media keys, GNOME's media panel, pointer dragging,
+multi-selection gestures, native file-chooser use, and keyboard focus traversal
+still need the user-facing checks listed there.
 
 ## Later phases
 
