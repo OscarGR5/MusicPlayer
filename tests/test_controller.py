@@ -316,3 +316,74 @@ def test_saved_order_start_skips_missing_preserves_modes_and_empty_is_noop(contr
     assert player.queue == tuple(saved)
     assert player.current_song_id == indexed_songs[3].id
     assert player.shuffle and player.repeat == 'one'
+
+
+def test_temporarily_unreadable_track_is_skipped_and_can_return(controller, indexed_songs):
+    import os
+    player, clock, events = controller
+    path = Path(indexed_songs[1].path)
+    permissions = path.stat().st_mode
+    try:
+        path.chmod(0)
+        if os.access(path, os.R_OK):
+            pytest.skip('This user can bypass file permissions')
+        player.activate(indexed_songs)
+        player.next()
+        assert player.current_song_id == indexed_songs[2].id
+        assert player.state == 'playing'
+    finally:
+        path.chmod(permissions)
+    player.previous()
+    assert player.current_song_id == indexed_songs[0].id
+    player.activate(indexed_songs, 1)
+    assert player.current_song_id == indexed_songs[1].id
+
+
+def test_history_and_statistics_agree_after_pause_seek_replay_and_restart(controller, indexed_songs):
+    from music_player.statistics import StatisticsReader
+    from music_player.history import ListeningTracker
+
+    player, clock, events = controller
+    player.activate(indexed_songs)
+
+    def listen(seconds):
+        for _ in range(round(seconds * 4)):
+            clock.advance(0.25)
+            player.audio.position += 0.25
+            player.tick()
+
+    listen(12)
+    player.pause()
+    clock.advance(90)
+    player.tick()
+    player.seek(80)
+    player.play_pause()
+    listen(18)
+    assert player.history.active.listened == 30
+    player.set_repeat('one')
+    player.audio.event('eos')
+    listen(4)
+    player.audio.event('buffering')
+    clock.advance(60)
+    player.tick()
+    player.audio.event('playing')
+    listen(2)
+    player.audio.event('error', 'Decoder failed')
+    player.close()
+
+    recovered = ListeningTracker(database_path(), clock.monotonic, clock.utcnow)
+    reader = StatisticsReader(database_path())
+    try:
+        data = reader.read()
+        connection = recovered.db.connection
+        assert data.seconds == 36
+        assert data.plays == data.unique_songs == 1
+        assert connection.execute('SELECT SUM(seconds) FROM listening_intervals').fetchone()[0] == data.seconds
+        assert connection.execute('SELECT SUM(listened_seconds) FROM playback_sessions').fetchone()[0] == data.seconds
+        assert connection.execute('SELECT COUNT(*) FROM playback_sessions').fetchone()[0] == 2
+        assert connection.execute('SELECT COUNT(*) FROM qualified_plays').fetchone()[0] == data.plays
+        assert [row[0] for row in connection.execute('SELECT end_reason FROM playback_sessions ORDER BY started_at')] == ['eos', 'error']
+        assert reader.read() == data
+    finally:
+        reader.close()
+        recovered.close()

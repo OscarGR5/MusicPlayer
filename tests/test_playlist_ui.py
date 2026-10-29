@@ -1,5 +1,7 @@
 import hashlib
 import shutil
+import gc
+import weakref
 from pathlib import Path
 
 import gi
@@ -10,6 +12,7 @@ from gi.repository import Gio, GLib, Gtk
 
 from music_player.library import LibraryDatabase
 from music_player.paths import database_path
+from music_player.window import MusicPlayerWindow
 from test_audio import wait_for
 from test_library_ui import open_window
 
@@ -34,6 +37,39 @@ def ids(window):
 
 def members(window, playlist_id):
     return [song.id for song in window.playlists.songs(playlist_id)]
+
+
+def test_replaced_rows_are_released_and_rebound_context_menu_works(library, monkeypatch):
+    rows = weakref.WeakSet()
+    attach = MusicPlayerWindow._attach_song_menu
+
+    def record(self, widget, item):
+        rows.add(item)
+        attach(self, widget, item)
+
+    monkeypatch.setattr(MusicPlayerWindow, '_attach_song_menu', record)
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        playlist = window.playlists.create('Row lifecycle', [song.id for song in library[:2]])
+        window._refresh_sidebar()
+        gc.collect()
+        initial = len(rows)
+        assert initial > 0
+        for _ in range(12):
+            window._show_view(playlist.id)
+            window._show_view(None)
+        gc.collect()
+        # The same final model needs at most the original live rows. Checking
+        # object lifetime avoids machine-dependent RSS or timing assertions.
+        assert len(rows) <= initial
+        cell = next(item.get_child().get_parent() for item in rows
+                    if item.get_item() is not None and item.get_position() == 0)
+        # Exercise the installed gesture callback after many model replacements.
+        # This is callback verification, not a physical pointer-input test.
+        calls = []
+        monkeypatch.setattr(window, '_show_song_menu', lambda *args: calls.append(args))
+        cell._song_context_gesture.emit('pressed', 1, 3.0, 4.0)
+        assert calls and calls[0][0] == 0
 
 
 def test_native_create_validation_sidebar_rename_and_confirmed_delete(library):

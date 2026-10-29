@@ -380,7 +380,24 @@ def test_real_engine_window_controls_and_seek_signals(long_wav_file, user_direct
 def test_launcher_cwd_reactivation_independent_gdbus_and_quit(long_wav_file):
     root = Path(__file__).resolve().parents[1]
     client = connection()
-    launch = [sys.executable, str(root / 'desktop/launch.py')]
+    # Execute the real launcher while replacing only its output device. This
+    # subprocess must not depend on (or play through) the user's sound server.
+    program = '''import runpy, sys
+from pathlib import Path
+launcher = sys.argv[1]
+sys.path.insert(0, str(Path(launcher).parents[1]))
+from music_player.audio import AudioPlayer, Gst
+initialize = AudioPlayer.__init__
+def fake_output(self, *args, **kwargs):
+ initialize(self, *args, **kwargs)
+ sink = Gst.ElementFactory.make('fakesink')
+ sink.set_property('sync', True)
+ self.pipeline.set_property('audio-sink', sink)
+AudioPlayer.__init__ = fake_output
+sys.argv = [launcher]
+runpy.run_path(launcher, run_name='__main__')
+'''
+    launch = [sys.executable, '-c', program, str(root / 'desktop/launch.py')]
     process = subprocess.Popen(launch, cwd='/tmp', stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     try:
         wait_for(lambda: owns_name(client), timeout=10)
@@ -394,6 +411,9 @@ def test_launcher_cwd_reactivation_independent_gdbus_and_quit(long_wav_file):
         response = subprocess.run(['gdbus', 'call', '--session', '--dest', BUS_NAME, '--object-path', OBJECT_PATH,
                                    '--method', PROPERTIES + '.Get', ROOT, 'Identity'], capture_output=True, text=True, timeout=5)
         assert response.returncode == 0 and 'MusicPlayer' in response.stdout
+        response = subprocess.run(['busctl', '--user', 'introspect', BUS_NAME, OBJECT_PATH],
+                                  capture_output=True, text=True, timeout=5)
+        assert response.returncode == 0 and PLAYER in response.stdout
         call(client, PLAYER, 'OpenUri', GLib.Variant('(s)', (long_wav_file.as_uri(),)))
         wait_for(lambda: get(client, 'PlaybackStatus') == 'Playing')
         call(client, ROOT, 'Raise')

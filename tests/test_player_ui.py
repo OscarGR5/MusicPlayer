@@ -6,7 +6,7 @@ import gi
 import pytest
 
 gi.require_version('Gtk', '4.0')
-from gi.repository import Gtk
+from gi.repository import Gio, GLib, Gtk
 
 from music_player.artwork import cache_artwork
 from music_player.audio import AudioPlayer
@@ -117,7 +117,7 @@ def test_central_actions_space_editable_guard_and_search_focus(library, monkeypa
         assert not window.shortcuts.space()
         assert window.controller.state == 'playing'
         assert window._search.get_text() == 'typing with spaces'
-        window.bar.play.grab_focus()
+        window.view.grab_focus()
         assert window.shortcuts.space()
         wait_for(lambda: window.controller.state == 'paused')
         window.activate_action('win.next', None)
@@ -133,6 +133,108 @@ def test_central_actions_space_editable_guard_and_search_focus(library, monkeypa
         for action in ('next', 'previous', 'mute', 'open', 'search'):
             assert window.get_application().get_accels_for_action('win.' + action)
         assert window.get_application().get_accels_for_action('win.play-pause') == []
+
+
+def test_space_defers_to_focused_native_controls(library):
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        window.view.emit('activate', 0)
+        wait_for(lambda: window.controller.state == 'playing')
+        for button in (window.bar.play, window.bar.shuffle, window.bar.next,
+                       window.bar.repeat, window.bar.mute, window._rescan,
+                       window._create_playlist):
+            button.grab_focus()
+            assert not window.shortcuts.space(), button.get_tooltip_text()
+            assert window.controller.state == 'playing'
+        window.sidebar.select_row(window._statistics_row)
+        window.statistics.selector.grab_focus()
+        assert not window.shortcuts.space()
+
+
+@pytest.mark.parametrize('dragging', [False, True])
+@pytest.mark.parametrize('terminal', ['stop', 'error'])
+def test_pending_seek_is_cancelled_when_playback_ends(library, dragging, terminal):
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        window.view.emit('activate', 0)
+        wait_for(lambda: window.controller.state == 'playing')
+        bar = window.bar
+        if dragging:
+            bar.begin_seek()
+        bar.progress.set_value(4)
+        if terminal == 'stop':
+            window.controller.stop()
+        else:
+            window.player.stop()
+            window.controller._audio_event('error', 'Decoder failed')
+        assert not bar._dragging
+        assert bar._seek_source is None
+        assert not bar.progress.get_sensitive()
+        bar.finish_seek()
+        assert bar._seek_source is None
+
+
+def test_file_dialog_cancel_open_and_close_cleanup(library, monkeypatch):
+    # Exercise asynchronous ownership without driving the user's portal. The
+    # native pre-presentation shutdown case has a separate standalone reproducer.
+    pending = []
+    monkeypatch.setattr(Gtk.FileDialog, 'open', lambda dialog, parent, cancel, callback:
+                        pending.append((dialog, cancel, callback)))
+
+    def cancelled(dialog, result):
+        raise GLib.Error.new_literal(Gtk.DialogError.quark(), 'Cancelled', Gtk.DialogError.CANCELLED)
+
+    monkeypatch.setattr(Gtk.FileDialog, 'open_finish', cancelled)
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        window._open_file(None)
+        chooser = window._chooser
+        assert isinstance(chooser, Gtk.FileDialog)
+        window._open_file(None)
+        assert window._chooser is chooser
+        assert len(pending) == 1
+        window._chooser_cancel.cancel()
+        pending[0][2](chooser, None)
+        assert window._chooser is None
+        window._open_file(None)
+        chooser = window._chooser
+        cancellation = window._chooser_cancel
+        window.close()
+        assert window._chooser is None
+        assert cancellation.is_cancelled()
+
+
+def test_file_dialog_result_errors_and_late_results_after_close(library, monkeypatch):
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def open_finish(self, result):
+            if isinstance(self.value, Exception):
+                raise self.value
+            return self.value
+
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        song = window.sorted.get_item(0).song
+        window._file_response(Result(Gio.File.new_for_path(song.path)), None)
+        wait_for(lambda: window.controller.state == 'playing')
+        assert window.controller.current_song_id == song.id
+        before = window._status.get_text()
+        for code in (Gtk.DialogError.CANCELLED, Gtk.DialogError.DISMISSED):
+            error = GLib.Error.new_literal(Gtk.DialogError.quark(), 'Cancelled', code)
+            window._file_response(Result(error), None)
+            assert window._status.get_text() == before
+        window._file_response(Result(Gio.File.new_for_uri('https://example.com/audio.wav')), None)
+        assert 'Only local files' in window._status.get_text()
+        error = GLib.Error.new_literal(Gtk.DialogError.quark(), 'Chooser failed', Gtk.DialogError.FAILED)
+        window._file_response(Result(error), None)
+        assert 'Chooser failed' in window._status.get_text()
+        opened = []
+        monkeypatch.setattr(window.controller, 'open_file', opened.append)
+        window.close()
+        window._file_response(Result(Gio.File.new_for_path(song.path)), None)
+        assert not opened
 
 
 @pytest.mark.parametrize('size', [(1040, 640), (720, 480)])

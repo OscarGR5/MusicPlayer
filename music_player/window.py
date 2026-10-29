@@ -26,6 +26,7 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         self.set_size_request(720, 400)
         self._closed = False
         self._chooser = None
+        self._chooser_cancel = None
         self.scanner = None
         self._items = {}
         self._query = ""
@@ -195,6 +196,7 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
 
         cover_factory.connect("setup", cover_setup)
         cover_factory.connect("bind", cover_bind)
+        cover_factory.connect("unbind", self._cell_unbind, 'cover')
         self.view.append_column(Gtk.ColumnViewColumn(title="", factory=cover_factory, fixed_width=64))
 
         for title, field, width in (("Title", "title", 220), ("Artist", "artist", 160),
@@ -248,6 +250,9 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
             item._playing_handler = song_item.connect("notify::playing", lambda song, _: marker.set_visible(song.playing))
 
     def _cell_unbind(self, factory, item, field):
+        child = item.get_child()
+        widget = child.get_parent() or child
+        widget._song_context_item = None
         if field == "title" and getattr(item, "_playing_handler", None):
             item.get_item().disconnect(item._playing_handler)
             item._playing_handler = None
@@ -412,27 +417,31 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
 
     def _open_file(self, button):
         if self._chooser is not None:
-            self._chooser.show()
             return
-        self._chooser = Gtk.FileChooserNative.new(
-            "Select local audio", self, Gtk.FileChooserAction.OPEN, "Open", "Cancel"
-        )
-        self._chooser.connect("response", self._file_response)
-        self._chooser.show()
+        self._chooser = Gtk.FileDialog(title='Select local audio', accept_label='Open')
+        self._chooser_cancel = Gio.Cancellable()
+        self._chooser.open(self, self._chooser_cancel, self._file_response)
 
-    def _file_response(self, chooser, response):
+    def _file_response(self, chooser, result):
         try:
-            if response == Gtk.ResponseType.ACCEPT:
-                file = chooser.get_file()
-                path = file.get_path() if file is not None else None
-                if path is None:
-                    raise ValueError("Only local files are supported.")
-                self.controller.open_file(path)
+            file = chooser.open_finish(result)
+            if self._closed:
+                return
+            path = file.get_path() if file is not None else None
+            if path is None:
+                raise ValueError("Only local files are supported.")
+            self.controller.open_file(path)
+        except GLib.Error as exc:
+            cancelled = any(exc.matches(Gtk.DialogError.quark(), code)
+                            for code in (Gtk.DialogError.CANCELLED, Gtk.DialogError.DISMISSED))
+            if not self._closed and not cancelled:
+                self._show_status(f"Error: {exc.message}")
         except (OSError, sqlite3.Error, ValueError, RuntimeError) as exc:
-            self._show_status(f"Error: {exc}")
+            if not self._closed:
+                self._show_status(f"Error: {exc}")
         finally:
-            chooser.destroy()
-            self._chooser = None
+            if self._chooser is chooser:
+                self._chooser = self._chooser_cancel = None
 
     def close_player(self):
         if self._closed:
@@ -452,9 +461,9 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         self.statistics.close()
         if self.scanner is not None:
             self.scanner.close()
-        if self._chooser is not None:
-            self._chooser.destroy()
-            self._chooser = None
+        if self._chooser_cancel is not None:
+            self._chooser_cancel.cancel()
+            self._chooser = self._chooser_cancel = None
         self.controller.close()
 
     def _on_close(self, window):
@@ -556,13 +565,19 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
             self.add_action(action)
 
     def _attach_song_menu(self, widget, item):
+        # Keep the wrapper alive while bound; _cell_unbind releases the back
+        # reference so a retired ListItem and its cells can be freed.
         widget._song_context_item = item
         if getattr(widget, '_song_context_gesture', None) is not None:
             return
         gesture = Gtk.GestureClick(button=3)
         gesture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         def pressed(gesture, count, x, y):
-            position = widget._song_context_item.get_position()
+            widget = gesture.get_widget()
+            item = widget._song_context_item
+            if item is None:
+                return
+            position = item.get_position()
             if position != Gtk.INVALID_LIST_POSITION:
                 self._show_song_menu(position, widget, x, y)
                 gesture.set_state(Gtk.EventSequenceState.CLAIMED)

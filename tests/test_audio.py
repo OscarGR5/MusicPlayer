@@ -166,3 +166,38 @@ def test_requested_levels_survive_sound_server_stream_restore(player, wav_file):
     assert engine.volume == 0.37 and not engine.muted
     assert engine.pipeline.get_property('volume') == pytest.approx(0.37)
     assert not engine.pipeline.get_property('mute')
+
+
+def test_pause_while_buffering_then_resume(player, long_wav_file):
+    engine, statuses = player
+    engine.load(long_wav_file)
+    engine.play()
+    wait_for(lambda: engine.state == 'playing')
+    engine._on_message(engine._bus, Gst.Message.new_buffering(engine.pipeline, 20))
+    wait_for(lambda: engine.pipeline.get_state(0).state == Gst.State.PAUSED)
+    assert engine.state == 'buffering'
+    engine.pause()
+    wait_for(lambda: engine.state == 'paused', timeout=1)
+    # A late buffering completion must not override the explicit pause.
+    engine._on_message(engine._bus, Gst.Message.new_buffering(engine.pipeline, 100))
+    assert engine.pipeline.get_state(0).state == Gst.State.PAUSED
+    engine.play()
+    wait_for(lambda: engine.state == 'playing')
+
+
+def test_rapid_switches_discard_old_bus_events_and_keep_one_pipeline(player, long_wav_file, tmp_path):
+    engine, statuses = player
+    second = tmp_path / 'another.wav'
+    second.write_bytes(long_wav_file.read_bytes())
+    pipeline = engine.pipeline
+    for index in range(40):
+        engine.load(long_wav_file if index % 2 else second)
+        engine.play()
+    engine.pause()
+    wait_for(lambda: engine.state == 'paused')
+    assert engine.path == long_wav_file
+    assert engine.pipeline is pipeline
+    assert engine.pipeline.get_state(0).state == Gst.State.PAUSED
+    assert not any(status.startswith('Error:') for status in statuses)
+    engine.stop()
+    assert engine.pipeline.get_state(0).state == Gst.State.NULL

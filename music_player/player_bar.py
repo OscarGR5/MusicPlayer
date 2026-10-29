@@ -99,6 +99,8 @@ class PlayerBar(Gtk.Box):
 
     def update(self, event):
         controller = self.controller
+        if event == 'state' and controller.state in ('stopped', 'error', 'eos'):
+            self.cancel_seek()
         if event == 'track':
             self.cancel_seek()
             song = controller.current

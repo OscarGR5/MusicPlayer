@@ -63,10 +63,15 @@ class AudioPlayer:
         if self.path is None:
             raise ValueError('Select an audio file first.')
         self._target = state
-        if self.pipeline.set_state(state) == Gst.StateChangeReturn.FAILURE:
+        result = self.pipeline.set_state(state)
+        if result == Gst.StateChangeReturn.FAILURE:
             self._reset()
             message = 'GStreamer could not start playback. Check the audio output and installed decoders.'
             self._notify(f'Error: {message}', 'error', message)
+        elif state == Gst.State.PAUSED and result == Gst.StateChangeReturn.SUCCESS and self.state != 'paused':
+            # Buffering may already have paused the pipeline, so no new state
+            # message is emitted for the user's explicit pause request.
+            self._notify('Paused', 'paused')
 
     def play(self):
         self._set_state(Gst.State.PLAYING)

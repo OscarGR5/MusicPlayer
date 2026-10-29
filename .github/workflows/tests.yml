@@ -1,0 +1,33 @@
+name: Linux tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi python3-gi-cairo python3-cairo \
+            python3-mutagen python3-pytest gir1.2-gtk-4.0 gir1.2-gstreamer-1.0 \
+            gir1.2-gdkpixbuf-2.0 gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-libav ffmpeg xvfb dbus-x11 desktop-file-utils
+      - name: Run isolated GTK, audio, database, and D-Bus tests
+        env:
+          GDK_BACKEND: x11
+          GSK_RENDERER: cairo
+          GTK_A11Y: none
+        run: xvfb-run -a dbus-run-session -- /usr/bin/python3 -m pytest -q
+      - name: Syntax and whitespace
+        run: |
+          /usr/bin/python3 -m compileall -q music_player desktop tests
+          git diff --check
