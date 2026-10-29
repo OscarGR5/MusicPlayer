@@ -23,7 +23,7 @@ _application_ids = itertools.count()
 
 
 @contextmanager
-def open_window():
+def open_window(size=None):
     app = Gtk.Application(application_id=f"io.github.OscarGR5.MusicPlayer.LibraryTests.Test{next(_application_ids)}",
                           flags=Gio.ApplicationFlags.NON_UNIQUE)
     app.register(None)
@@ -31,6 +31,8 @@ def open_window():
     sink = Gst.ElementFactory.make("fakesink")
     sink.set_property("sync", True)
     window.player.pipeline.set_property("audio-sink", sink)
+    if size is not None:
+        window.set_default_size(*size)
     window.present()
     try:
         yield window
@@ -79,9 +81,9 @@ def test_search_sort_all_columns_activate_and_playback_controls(user_directories
         wait_for(lambda: window._status.get_text() == "Playing")
         assert window.sorted.get_item(0).playing
         assert window.player.path == user_directories / "first.wav"
-        window._controls[1].emit("clicked")
+        window.bar.play.emit("clicked")
         wait_for(lambda: window._status.get_text() == "Paused")
-        window._controls[0].emit("clicked")
+        window.bar.play.emit("clicked")
         wait_for(lambda: window._status.get_text() == "Playing")
         playing = window.sorted.get_item(0)
         # Failed selection must preserve the marker for audio that is still playing.
@@ -91,7 +93,7 @@ def test_search_sort_all_columns_activate_and_playback_controls(user_directories
         assert window._status.get_text().startswith("Error:")
         assert playing.playing
         assert window.player.pipeline.get_state(0).state == Gst.State.PLAYING
-        window._controls[2].emit("clicked")
+        window.controller.stop()
         assert window._status.get_text() == "Stopped"
         assert not window.sorted.get_item(0).playing
         window.player.path.unlink()
@@ -137,6 +139,12 @@ def test_existing_index_visible_while_worker_runs_and_main_thread_stays_responsi
             assert window.scanner.running
             assert not window.scanner.start()
             assert not window._rescan.get_sensitive()
+            window.view.emit('activate', 0)
+            wait_for(lambda: window.controller.state == 'playing')
+            window.bar.play.emit('clicked')
+            wait_for(lambda: window.controller.state == 'paused')
+            window.bar.play.emit('clicked')
+            wait_for(lambda: window.controller.state == 'playing')
             ticks = []
 
             def tick():

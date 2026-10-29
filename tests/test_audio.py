@@ -100,3 +100,69 @@ def test_close_during_playback_is_idempotent(player, wav_file):
     assert not engine._bus.handler_is_connected(engine._handler)
     with pytest.raises(RuntimeError, match="closed"):
         engine.play()
+
+
+def test_position_duration_seek_volume_and_mute(player, wav_file):
+    engine, statuses = player
+    engine.load(wav_file)
+    engine.play()
+    wait_for(lambda: statuses[-1] == 'Playing')
+    assert engine.duration == pytest.approx(1)
+    assert 0 <= engine.position < 1
+    pipeline = engine.pipeline
+    engine.seek(0.5)
+    wait_for(lambda: not engine.seeking)
+    assert engine.position == pytest.approx(0.5, abs=0.2)
+    engine.pause()
+    wait_for(lambda: statuses[-1] == 'Paused')
+    engine.seek(0.2)
+    wait_for(lambda: not engine.seeking)
+    assert engine.position == pytest.approx(0.2, abs=0.02)
+    for value in (-1, float('nan'), float('inf'), 2):
+        with pytest.raises(ValueError):
+            engine.seek(value)
+    engine.volume = 0.35
+    engine.muted = True
+    assert engine.volume == pytest.approx(0.35) and engine.muted
+    engine.muted = False
+    assert engine.volume == pytest.approx(0.35) and not engine.muted
+    with pytest.raises(ValueError):
+        engine.volume = 1.1
+    assert engine.pipeline is pipeline
+
+
+def test_buffering_and_structured_errors(player, wav_file, tmp_path):
+    engine, statuses = player
+    events = []
+    engine._on_event = lambda event, detail=None: events.append((event, detail))
+    engine.load(wav_file)
+    engine.play()
+    wait_for(lambda: statuses[-1] == 'Playing')
+    engine._on_message(engine._bus, Gst.Message.new_buffering(engine.pipeline, 20))
+    assert events[-1][0] == 'buffering'
+    engine._on_message(engine._bus, Gst.Message.new_buffering(engine.pipeline, 100))
+    wait_for(lambda: events[-1][0] == 'playing')
+    invalid = tmp_path / 'bad.wav'
+    invalid.write_bytes(b'not audio')
+    engine.load(invalid)
+    engine.play()
+    wait_for(lambda: events[-1][0] == 'error')
+    assert events[-1][1]
+    assert engine.state == 'error'
+    assert engine.pipeline.get_state(0).state == Gst.State.NULL
+
+
+def test_requested_levels_survive_sound_server_stream_restore(player, wav_file):
+    engine, statuses = player
+    engine.load(wav_file)
+    engine.volume = 0.37
+    engine.muted = False
+    engine.play()
+    wait_for(lambda: statuses[-1] == 'Playing')
+    engine.pipeline.set_property('volume', 0.9)
+    engine.pipeline.set_property('mute', True)
+    engine._on_message(engine._bus, Gst.Message.new_state_changed(
+        engine.pipeline, Gst.State.PAUSED, Gst.State.PLAYING, Gst.State.VOID_PENDING))
+    assert engine.volume == 0.37 and not engine.muted
+    assert engine.pipeline.get_property('volume') == pytest.approx(0.37)
+    assert not engine.pipeline.get_property('mute')
