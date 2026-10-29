@@ -23,7 +23,7 @@ Queue snapshots, history schema, and the 30-second/50% counting policy are uncha
 | Medium, accessibility | The capture-phase Space shortcut intercepted focused buttons, triggering playback instead of the button's action. | Fixed: defer to native button/menu/dropdown/editable behavior. Focus-guard callbacks are tested; physical key delivery remains unverified. |
 | Low | Statistics drawing used deprecated style-context color APIs. Native file selection used a deprecated chooser API. | Updated to `Gtk.Widget.get_color` and asynchronous `Gtk.FileDialog`, both available since GTK 4.10. File-dialog cancellation, errors, duplicate requests, and late results are tested. |
 | Test reliability | Application and launcher lifecycle tests depended on the desktop sound server; the one-second lifecycle fixture could finish before assertions under load. | Use synchronized fake output everywhere and a longer lifecycle fixture. No new runtime dependency. |
-| Test reliability | Exact-size checks compared requested window allocation with content size excluding theme borders, failing under GTK 4.14. | Compare full allocated dimensions, retaining exact 1040 × 640 and 720 × 480 checks across themes. |
+| Test reliability | Exact-size checks compared requested window allocation with content size excluding theme borders, failing under GTK 4.14. | Compare window bounds including theme borders, retaining exact 1040 × 640 and 720 × 480 checks across themes. |
 
 ## Unresolved release blocker
 
