@@ -10,7 +10,18 @@ from test_audio import wait_for
 
 
 @pytest.mark.skipif(not Gtk.init_check(), reason="No graphical display available")
-def test_window_startup_reactivation_and_close(long_wav_file, monkeypatch):
+def test_window_startup_reactivation_and_close(long_wav_file, monkeypatch, request):
+    settings = Gtk.Settings.get_default()
+    original = settings.get_property('gtk-application-prefer-dark-theme')
+    request.addfinalizer(lambda: settings.set_property('gtk-application-prefer-dark-theme', original))
+    settings.set_property('gtk-application-prefer-dark-theme', False)
+    from music_player.window import MusicPlayerWindow
+
+    def create_window(application):
+        assert settings.get_property('gtk-application-prefer-dark-theme')
+        return MusicPlayerWindow(application)
+
+    monkeypatch.setattr('music_player.app.MusicPlayerWindow', create_window)
     app = MusicPlayerApplication()
     app.set_application_id("io.github.OscarGR5.MusicPlayer.Tests")
     failures = []

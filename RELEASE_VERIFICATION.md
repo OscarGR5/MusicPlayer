@@ -165,3 +165,28 @@ portal request subtree was empty. Syntax compilation and `git diff --check` pass
 The Linux CI workflow uses standard system packages, Xvfb, fake audio output,
 and private D-Bus sessions, with no secrets. Passing X11 CI cannot establish
 native Wayland portal safety or physical-input sign-off.
+
+## Dark appearance and player slider follow-up
+
+The complete Fedora suite passes **135 tests** in 18.91 s under nested Xwayland
+with a private D-Bus session after the dark-startup and player layout changes.
+Optional capture callbacks timed out for some occluded windows on the host
+Wayland session; the isolated display run passed with captures enabled.
+Startup sets GTK's application dark preference before window
+creation. A separate process with an isolated GNOME light preference rendered a
+light baseline window followed by dark library, playlist, statistics, and playlist
+dialog surfaces. The real desktop appearance setting was unchanged.
+
+Progress/volume drawing widths measured **300/140 px at 1040×640** and
+**228/111 px at 720×480**, including live resizing back to the larger size.
+The player bar remained 70 px high. Synthetic light/dark captures and bounds
+checks confirmed centered playback controls, truncated long metadata, and no
+player-bar clipping or overlap.
+
+XTest pointer events in a nested Xwayland session verified progress dragging,
+one seek on release, volume dragging, and mute/unmute at both sizes in both
+themes, using generated audio and a temporary database. This exposed a legacy
+event observer receiving a null event through the GTK binding. A grouped native
+drag gesture now tracks begin/end/cancel without taking over the scale's drag.
+Automated regressions cover release, cancellation, and debounced keyboard/wheel
+edits. These checks do not replace physical Wayland input sign-off.

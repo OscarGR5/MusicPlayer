@@ -102,8 +102,12 @@ Mute preserves that volume; unmuting restores it. Mute itself is not persisted.
 use their stable song ID; files outside the index are playable with metadata
 and cover art but are excluded from library statistics and are not imported.
 Closing the window cancels scanning, checkpoints history, stops audio, and exits.
-Styling follows the GTK light/dark theme. The player bar fits the 720-pixel
-minimum width; the library table can scroll horizontally in narrow windows.
+Normal launches prefer GTK's dark theme for the window and application-owned
+dialogs, independently of GNOME's appearance preference. No system settings are
+changed. The player bar keeps playback controls horizontally centered, with
+progress and volume sliders preferring about 300 and 140 pixels at a 1040-pixel
+window width. Both shrink at the 720-pixel minimum width, and long track details
+truncate; the library table can scroll horizontally in narrow windows.
 
 | Shortcut | Action |
 | --- | --- |

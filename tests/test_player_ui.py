@@ -1,4 +1,5 @@
 from dataclasses import replace
+import os
 from pathlib import Path
 import shutil
 
@@ -59,13 +60,18 @@ def test_player_icons_modes_volume_metadata_and_seeking(library, artwork, tmp_pa
             calls.append(value)
             return seek(value)
         monkeypatch.setattr(window.player, 'seek', record)
-        bar.begin_seek()
+        controllers = bar.progress.observe_controllers()
+        drags = [controllers.get_item(index) for index in range(controllers.get_n_items())
+                 if isinstance(controllers.get_item(index), Gtk.GestureDrag)]
+        observer = drags[0]
+        assert any(observer is not native and observer.is_grouped_with(native) for native in drags)
+        observer.emit('drag-begin', 0, 0)
         for value in (2, 3, 4):
             bar.progress.set_value(value)
         window.controller.tick()
         assert bar.progress.get_value() == 4
         assert calls == []
-        bar.finish_seek()
+        observer.emit('drag-end', 20, 0)
         wait_for(lambda: calls == [4] and not window.player.seeking)
         assert window.player.position == pytest.approx(4, abs=0.05)
         # Keyboard/wheel edits are debounced too.
@@ -73,6 +79,11 @@ def test_player_icons_modes_volume_metadata_and_seeking(library, artwork, tmp_pa
             bar.progress.set_value(value)
         wait_for(lambda: calls == [4, 6] and not window.player.seeking)
         assert window.player.position == pytest.approx(6, abs=0.05)
+        observer.emit('drag-begin', 0, 0)
+        bar.progress.set_value(8)
+        observer.emit('cancel', None)
+        assert not bar._dragging and bar._seek_source is None
+        assert calls == [4, 6]
         bar.update_progress()
         assert bar.elapsed.get_text() == '0:06'
         assert bar.total.get_text() == '0:12'
@@ -294,6 +305,13 @@ def test_player_bar_stays_centered_and_inside_window(library, size, dark):
     settings.set_property('gtk-application-prefer-dark-theme', dark)
     try:
         with open_window(size) as window:
+            wait_for(lambda: not window.scanner.running)
+            song = window.sorted.get_item(0).song
+            window.controller.activate([replace(song, title='A long track title ' * 20,
+                                                artist='A long artist name ' * 20,
+                                                album='A long album name ' * 20)])
+            wait_for(lambda: window.controller.state == 'playing')
+            window.controller.play_pause()
             wait_for(lambda: window.bar.get_width() > 0)
             bar = window.bar
             for child in (bar.cover, bar.title, bar.progress, bar.repeat, bar.volume, bar.mute):
@@ -301,8 +319,37 @@ def test_player_bar_stays_centered_and_inside_window(library, size, dark):
                 assert valid and bounds.get_width() > 0
                 assert bounds.get_x() >= -0.5
                 assert bounds.get_x() + bounds.get_width() <= bar.get_width() + 0.5
-            valid, center = bar.layout.get_center_widget().compute_bounds(bar)
+            valid, center = bar.layout.get_child_at(1, 0).compute_bounds(bar)
             assert valid
             assert center.get_x() + center.get_width() / 2 == pytest.approx(bar.get_width() / 2, abs=1)
+            _, left = bar.layout.get_child_at(0, 0).compute_bounds(bar)
+            _, right = bar.layout.get_child_at(3, 0).compute_bounds(bar)
+            assert left.get_x() + left.get_width() <= center.get_x() + 0.5
+            assert center.get_x() + center.get_width() <= right.get_x() + 0.5
+            assert bar.title.get_layout().is_ellipsized()
+            assert bar.artist.get_layout().is_ellipsized()
+            if size[0] == 1040:
+                assert 260 <= bar.progress.get_width() <= 320
+                assert 120 <= bar.volume.get_width() <= 150
+            else:
+                assert bar.progress.get_width() >= 130
+                assert bar.volume.get_width() >= 70
+            # Exercise the same seek and volume callbacks in every layout/theme.
+            bar.begin_seek()
+            bar.progress.set_value(4)
+            bar.finish_seek()
+            wait_for(lambda: not window.player.seeking and window.player.position == pytest.approx(4, abs=0.05))
+            bar.volume.set_value(37)
+            assert window.player.volume == pytest.approx(0.37)
+            bar.mute.emit('clicked')
+            assert window.player.muted
+            bar.mute.emit('clicked')
+            assert not window.player.muted
+            directory = os.environ.get('MUSICPLAYER_UI_CAPTURE_DIR')
+            if directory:
+                from test_statistics_ui import capture
+                target = Path(directory)
+                target.mkdir(parents=True, exist_ok=True)
+                capture(window, target / f'player-{size[0]}-{"dark" if dark else "light"}.png')
     finally:
         settings.set_property('gtk-application-prefer-dark-theme', previous)
