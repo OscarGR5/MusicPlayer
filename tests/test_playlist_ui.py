@@ -530,3 +530,85 @@ def test_move_actions_disabled_while_sorted_and_restored_in_saved_order(sorting_
     window.activate_action('win.playlist-down', None)
     assert ids(window) == saved
     assert members(window, playlist.id) == saved
+
+
+@pytest.mark.parametrize('playlist_view,query', [(False, ''), (True, ''), (True, 'track 00')],
+                         ids=['all-songs', 'playlist', 'filtered-playlist'])
+def test_sort_returns_viewport_to_top_preserving_selection_and_queue(library, wav_file, user_directories,
+                                                                    playlist_view, query):
+    from music_player.metadata import Metadata
+
+    def settle(window):
+        frames = []
+
+        def tick(widget, clock):
+            frames.append(None)
+            return len(frames) < 3
+
+        window.view.add_tick_callback(tick)
+        wait_for(lambda: len(frames) == 3)
+
+    with open_window(size=(720, 480)) as window:
+        wait_for(lambda: not window.scanner.running)
+        songs = []
+        with LibraryDatabase(database_path()) as db:
+            folder_id = db.folders()[0]['id']
+            for index in range(120):
+                path = user_directories / f'scroll-{index:03}.wav'
+                shutil.copyfile(wav_file, path)
+                songs.append(db.upsert(folder_id, path,
+                                       Metadata(f'Track {index:03}', f'Artist {index:03}',
+                                                f'Album {index:03}', index + 1), path.stat(), None))
+        saved = [song.id for song in songs[::2] + songs[1::2]]
+        playlist = window.playlists.create('Scroll regression', saved)
+        window._refresh_sidebar()
+        if playlist_view:
+            window._show_view(playlist.id)
+        else:
+            window._reload_view()
+        if query:
+            window._search.set_text(query)
+            wait_for(lambda: window._query == query)
+        displayed = ids(window)
+        window.controller.activate([library[0]], playing=False)
+        wait_for(lambda: window.controller.state == 'paused')
+        queue = window.controller.queue
+        window.selection.select_item(0, True)
+        window.selection.select_item(5, False)
+        selected = {song.id for song in window._selected_songs()}
+        vertical = window.view.get_vadjustment()
+        horizontal = window.view.get_hadjustment()
+        settle(window)
+        assert vertical.get_upper() > vertical.get_page_size() * 2
+        # Stay away from the edge: showing Saved order can widen a narrow window
+        # slightly and clamp an adjustment previously set to its maximum.
+        horizontal.set_value((horizontal.get_upper() - horizontal.get_page_size()) / 2)
+        settle(window)
+        horizontal_position = horizontal.get_value()
+        assert horizontal_position > 0
+        # From the top, GTK otherwise follows the old first row to the bottom
+        # when its position changes. Also cover sorts made after manual scrolling.
+        for column in range(1, 5):
+            for direction in (Gtk.SortType.DESCENDING, Gtk.SortType.ASCENDING):
+                if direction == Gtk.SortType.ASCENDING:
+                    vertical.set_value((vertical.get_upper() - vertical.get_page_size()) / 2)
+                    settle(window)
+                    assert vertical.get_value() > 0
+                window.view.sort_by_column(window.view.get_columns().get_item(column), direction)
+                settle(window)
+                wait_for(lambda: vertical.get_value() == pytest.approx(vertical.get_lower(), abs=1))
+                settle(window)
+                assert vertical.get_value() == pytest.approx(vertical.get_lower(), abs=1)
+                assert horizontal.get_value() == pytest.approx(horizontal_position, abs=1)
+                assert {song.id for song in window._selected_songs()} == selected
+                assert window.controller.queue is queue
+        if playlist_view:
+            vertical.set_value(vertical.get_upper() - vertical.get_page_size())
+            settle(window)
+            window._saved_order.emit('clicked')
+            settle(window)
+            wait_for(lambda: vertical.get_value() == pytest.approx(vertical.get_lower(), abs=1))
+            assert ids(window) == displayed
+            assert {song.id for song in window._selected_songs()} == selected
+            assert window.controller.queue is queue
+        assert members(window, playlist.id) == saved
