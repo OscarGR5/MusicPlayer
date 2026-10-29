@@ -68,7 +68,7 @@ not mean physical mouse or keyboard input.
 | File chooser | Asynchronous result/cancel/error/late-result ownership tested with controlled callbacks; standalone native shutdown reproduction fails on host GTK | Physical selection/cancel/reopen remains open; pre-presentation shutdown is blocked |
 | MPRIS | Private D-Bus sessions: registration/cleanup, metadata/art, transport, seeking/signals, modes/volume, malformed calls, conflict/missing/lost bus, reactivation; independent `gdbus` and `busctl` | Actual GNOME panel, hardware media keys, and desktop focus policy unverified |
 | Desktop installer | Temporary XDG only: validation, SVG rendering, other working directories, spaces/quotes/backslashes/percent paths, repeat install, relocation, missing interpreter, ownership/symlink protection, safe uninstall | No installation or removal in the real desktop profile |
-| Shutdown/resources | Scan cancellation, SQLite integrity, worker cleanup, repeated switching/navigation, playback memory observation | Native chooser shutdown exception described above; multi-hour listening not measured |
+| Shutdown/resources | Scan cancellation, close during an active statistics query with worker/connection cleanup, SQLite integrity, repeated switching/navigation, playback memory observation | Native chooser shutdown exception described above; multi-hour listening not measured |
 
 ## Resource measurements
 
@@ -134,5 +134,5 @@ Final Fedora suite: **132 passed** in 26.98 s, including the private-bus MPRIS
 suite. Syntax compilation and `git diff --check` passed. The standalone native
 portal shutdown case remains a separate failure. The initial baseline was 120
 passing tests. CI status is recorded in the Phase 7 pull request. The Linux CI workflow uses standard
-system packages, Xvfb, fake audio output, and private D-Bus sessions, with no secrets.
+system packages, Xvfb/Openbox, fake audio output, and private D-Bus sessions, with no secrets.
 Its passing status cannot clear the Wayland portal blocker or physical-input checks.
