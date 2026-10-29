@@ -449,16 +449,12 @@ The deprecated native chooser entry point is replaced by GTK's asynchronous
 This API migration does not fix the host GTK portal shutdown crash.
 
 The Linux GitHub Actions workflow installs system GTK/GStreamer packages and
-runs the suite under Xvfb/Openbox and a private D-Bus session on Ubuntu 24.04.
-Openbox supplies window management so GTK client-size requests are honored.
-It adds no runtime dependencies. A local headless equivalent, with Xvfb,
-Openbox, and the test packages installed, is:
+runs the suite under Xvfb and a private D-Bus session on Ubuntu 24.04. It adds no
+runtime dependencies. A local headless equivalent, with Xvfb and the test
+packages installed, is:
 
 ```sh
-xvfb-run -a dbus-run-session -- sh -c '
-  openbox > /tmp/musicplayer-window-manager.log 2>&1 &
-  exec python3 -m pytest -q
-'
+xvfb-run -a dbus-run-session -- python3 -m pytest -q
 ```
 
 Automated GTK callbacks and layout checks do not verify physical pointer or

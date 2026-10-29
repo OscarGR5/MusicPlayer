@@ -23,6 +23,7 @@ Queue snapshots, history schema, and the 30-second/50% counting policy are uncha
 | Medium, accessibility | The capture-phase Space shortcut intercepted focused buttons, triggering playback instead of the button's action. | Fixed: defer to native button/menu/dropdown/editable behavior. Focus-guard callbacks are tested; physical key delivery remains unverified. |
 | Low | Statistics drawing used deprecated style-context color APIs. Native file selection used a deprecated chooser API. | Updated to `Gtk.Widget.get_color` and asynchronous `Gtk.FileDialog`, both available since GTK 4.10. File-dialog cancellation, errors, duplicate requests, and late results are tested. |
 | Test reliability | Application and launcher lifecycle tests depended on the desktop sound server; the one-second lifecycle fixture could finish before assertions under load. | Use synchronized fake output everywhere and a longer lifecycle fixture. No new runtime dependency. |
+| Test reliability | Exact-size checks compared requested window allocation with content size excluding theme borders, failing under GTK 4.14. | Compare full allocated dimensions, retaining exact 1040 × 640 and 720 × 480 checks across themes. |
 
 ## Unresolved release blocker
 
@@ -134,5 +135,5 @@ Final Fedora suite: **132 passed** in 26.98 s, including the private-bus MPRIS
 suite. Syntax compilation and `git diff --check` passed. The standalone native
 portal shutdown case remains a separate failure. The initial baseline was 120
 passing tests. CI status is recorded in the Phase 7 pull request. The Linux CI workflow uses standard
-system packages, Xvfb/Openbox, fake audio output, and private D-Bus sessions, with no secrets.
+system packages, Xvfb, fake audio output, and private D-Bus sessions, with no secrets.
 Its passing status cannot clear the Wayland portal blocker or physical-input checks.
