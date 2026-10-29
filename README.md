@@ -110,8 +110,8 @@ minimum width; the library table can scroll horizontally in narrow windows.
 | Ctrl+O | Open local audio file |
 | Ctrl+F | Focus search |
 
-These are in-app GTK actions. No global media keys or desktop keyboard hooks
-are implemented; MPRIS is reserved for a later phase.
+These are in-app GTK actions. GNOME hardware media keys use the separate MPRIS
+integration described below; the application installs no global keyboard hooks.
 
 ## Playlists
 
@@ -245,6 +245,105 @@ and retry automatically, without touching playback.
 Statistics makes no schema changes or migrations and writes no history,
 preferences, playlists, or library rows. It adds no runtime dependencies.
 
+## Fedora desktop integration
+
+While running, MusicPlayer publishes `org.mpris.MediaPlayer2.musicplayer` at
+`/org/mpris/MediaPlayer2` on the session bus, using Gio/PyGObject. GNOME media
+controls and compatible MPRIS clients can play, pause, stop, navigate the active
+queue, seek, and change volume, shuffle, and repeat. These calls use the same
+PlaybackController as the player bar. Previous retains its restart-after-three-
+seconds behavior. Stop and exit flush listening history; seeking never counts
+skipped audio. No keyboard grabs, X11 hooks, extra D-Bus library, or background
+media-key process is installed.
+
+Metadata includes the current title, artist, album, length, an object-path track
+ID, and a file URI for cached artwork where available. Indexed and externally
+opened local tracks are supported. IDs remain stable through pause/resume and
+seeks and change on a new playback occurrence, so stale SetPosition requests
+are ignored. Loading and non-playing buffering are not reported as Playing.
+Capabilities reflect the loaded track, engine seek support, queue, and modes.
+Position and seek offsets use microseconds; position advances without repeated
+PropertiesChanged signals. Successful seeks emit Seeked, including player-bar
+seeks. Repeat maps Off/All/One to None/Playlist/Track. Volume is limited to the
+existing 0–1 range, with negative requests clamped to zero; positive MPRIS volume
+requests unmute. Playback rate remains 1.0. Fullscreen and TrackList are not
+supported.
+
+OpenUri accepts supported local audio `file:` URIs, including `file://localhost/`,
+and rejects remote authorities, network schemes, queries, fragments, and
+unsupported extensions. It performs no download. Raise requests presentation of
+the existing window, subject to GNOME/Wayland focus policy. Quit stops playback,
+flushes history, closes workers, and releases the MPRIS name and objects. Bus
+failure or a name conflict prints a non-intrusive diagnostic and leaves local
+playback available. No competing player is replaced or queued for takeover.
+
+GNOME chooses which MPRIS player receives physical Play/Pause, Next, and Previous
+keys. Delivery can depend on desktop settings and other players; correct D-Bus
+responses do not prove that a particular keyboard's keys are routed to this app.
+Existing in-app shortcuts continue to work.
+
+### Optional user launcher
+
+Installation is a separate, explicit action. Running the application does not
+install anything. From this checkout, with its existing virtual environment:
+
+```sh
+.venv/bin/python desktop/install.py install
+```
+
+The helper installs only these MusicPlayer files beneath `$XDG_DATA_HOME`
+(default `~/.local/share`):
+
+- `applications/io.github.OscarGR5.MusicPlayer.desktop`
+- `icons/hicolor/scalable/apps/io.github.OscarGR5.MusicPlayer.svg`
+
+There is no root access, sudo, RPM, Flatpak, or system-wide change. Repeating the
+command safely updates managed files and refuses unrelated files or symlinks at
+those exact names. Uninstall removes only MusicPlayer's managed launcher and
+icon, preserving the music library, database, history, and all other launchers:
+
+```sh
+.venv/bin/python desktop/install.py uninstall
+```
+
+The desktop entry uses `/usr/bin/env` to execute the checkout's absolute
+`.venv/bin/python` path and `desktop/launch.py`. It does not depend on the terminal
+working directory or a globally installed Python package, and quotes spaces and
+special path characters. The environment's interpreter symlink is preserved so
+Fedora's system GI bindings and the existing virtual environment remain in use.
+For a differently located environment, add `--python "/path to/venv/bin/python"`.
+The original SVG source lives under `music_player/assets/`; the same icon name
+is used by the launcher, GTK application, and MPRIS DesktopEntry association.
+D-Bus desktop activation is disabled. Normal Gtk.Application single-instance
+activation presents the existing window instead of starting another player.
+Close a running older version before launching an updated checkout.
+
+If the checkout moves, rerun the install command from its new directory (recreate
+the virtual environment there if needed), or specify the new location explicitly:
+
+```sh
+.venv/bin/python desktop/install.py install --checkout "/new location/MusicPlayer"
+```
+
+GNOME normally discovers the entry automatically; its application search can
+briefly cache entries. The checkout and its virtual environment must remain at
+the paths recorded by the last installation.
+
+### Verifying MPRIS
+
+With MusicPlayer running and a local song loaded, these existing system tools
+can inspect it without installing an additional client:
+
+```sh
+gdbus introspect --session --dest org.mpris.MediaPlayer2.musicplayer --object-path /org/mpris/MediaPlayer2
+gdbus call --session --dest org.mpris.MediaPlayer2.musicplayer --object-path /org/mpris/MediaPlayer2 --method org.mpris.MediaPlayer2.Player.PlayPause
+busctl --user introspect org.mpris.MediaPlayer2.musicplayer /org/mpris/MediaPlayer2
+```
+
+Check GNOME's media panel and physical keys separately. Closing the app should
+remove the MPRIS service and stop audio. No launcher installation is required for
+D-Bus controls; an installed entry supplies GNOME's launcher/icon association.
+
 ## Stored data and architecture
 
 - Database: `$XDG_DATA_HOME/musicplayer/library.sqlite3`, defaulting to
@@ -267,6 +366,9 @@ preferences, playlists, or library rows. It adds no runtime dependencies.
   widgets do not issue GStreamer operations directly.
 - `statistics.py` returns ordinary immutable Python data from read-only history
   queries; `statistics_ui.py` handles the GTK page, worker, and native Cairo chart.
+- `mpris.py` adapts controller events and commands to Gio session D-Bus.
+  `app.py` owns registration and shutdown; `desktop/` provides the optional
+  user launcher installer and a working-directory-independent entry point.
 
 The database stores folders, songs with availability, playback sessions,
 listening intervals, qualified plays, and a single volume preference. History
@@ -279,9 +381,8 @@ constraints prevent duplicates, and all bulk edits use transactions. Deleting
 a playlist cascades only to its membership rows. Phase 3 song and listening
 history tables are not rewritten by this migration.
 
-No MPRIS implementation is included. No software license has
-been selected. Environments, databases, secrets, caches, and test media are not
-committed.
+No software license has been selected. Environments, databases, secrets, caches,
+and test media are not committed.
 
 ## Tests
 
@@ -322,8 +423,17 @@ worker responsiveness, continued playback, light/dark themes, and scrolling at
 1040×640 and 720×480. Optional synthetic screenshots can be captured outside the
 repository with `MUSICPLAYER_UI_CAPTURE_DIR=/tmp/musicplayer-ui` when running
 `tests/test_statistics_ui.py`. Personal history and music are never test fixtures.
+Phase 6 adds MPRIS integration cases on an isolated `dbus-run-session` bus,
+including real GStreamer/GTK controls, independent gdbus calls, reactivation,
+name conflicts, signals, malformed requests, and missing-bus fallback. The full
+suite invokes these cases through `tests/test_mpris.py`; it never registers a
+player on the user's normal media session. Launcher tests use temporary XDG
+locations and executable probes for path quoting, repeated installation,
+relocation, uninstall, and original SVG rendering at 16–256 pixels. The test
+environment also needs Fedora's `dbus-run-session`, `gdbus`, and
+`desktop-file-validate` tools. These are test tools, not added application runtime
+dependencies. No test waits 30 seconds to qualify a play.
 
 ## Later phases
 
-A queue editor, hardware media keys, MPRIS, and desktop installation remain
-future work.
+A queue editor, streaming, and additional packaging remain outside this phase.

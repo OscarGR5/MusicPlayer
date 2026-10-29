@@ -98,14 +98,20 @@ class AudioPlayer:
             self._last_duration = value / Gst.SECOND
         return self._last_duration
 
+    @property
+    def can_seek(self):
+        if self._closed or self.path is None:
+            return False
+        query = Gst.Query.new_seeking(Gst.Format.TIME)
+        return bool(self.pipeline.query(query) and query.parse_seeking()[1])
+
     def seek(self, seconds):
         self._ensure_open()
         duration = self.duration
         if not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds < 0 or \
                 (duration is not None and seconds > duration):
             raise ValueError('Seek position must be inside the track.')
-        query = Gst.Query.new_seeking(Gst.Format.TIME)
-        if self.path is None or not self.pipeline.query(query) or not query.parse_seeking()[1]:
+        if not self.can_seek:
             raise ValueError('This track is not currently seekable.')
         # Suspend tracking before FLUSH can change position or emit state messages.
         self.seeking = True
@@ -114,7 +120,7 @@ class AudioPlayer:
                                             int(seconds * Gst.SECOND))
         if not success:
             self.seeking = False
-            self._on_event('seeked', None)
+            self._on_event('seeked', False)
             raise ValueError('GStreamer could not seek in this track.')
         self._last_position = float(seconds)
 
