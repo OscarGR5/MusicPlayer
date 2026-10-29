@@ -37,7 +37,7 @@ class WindowShortcuts:
     def space(self, widget=None, arguments=None, user_data=None):
         focused = self.window.get_focus()
         while focused is not None:
-            if isinstance(focused, (Gtk.Editable, Gtk.Popover)) or isinstance(focused, Gtk.TextView) and focused.get_editable():
+            if isinstance(focused, (Gtk.Editable, Gtk.Popover, Gtk.DropDown)) or isinstance(focused, Gtk.TextView) and focused.get_editable():
                 return False
             focused = focused.get_parent()
         self.window.activate_action('win.play-pause', None)

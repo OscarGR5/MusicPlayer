@@ -181,8 +181,69 @@ terminal; pending data is retained for retry while the application is running.
 
 Session records snapshot the song ID, title, artist, album, duration, and UTC
 start/end timestamps. Listening intervals also retain their local calendar date
-and system timezone, split at local midnight so daily/monthly totals remain
-possible. The Statistics interface is not implemented yet.
+and system timezone, split at local midnight for daily/monthly totals.
+
+## Statistics
+
+Choose **Statistics** below All Songs. The page scrolls above the permanent
+player bar. Switching among Statistics, All Songs, and playlists keeps the
+playing song, queue, shuffle, and repeat. Opening Statistics and returning to the
+same library or playlist view also preserves its search and selection.
+
+**All Time** is the default. The period selector includes calendar months with
+recorded listening or qualified plays, plus the current month, newest first.
+Summary values and rankings cover the entire selected period:
+
+- **Total Listening Time** sums persisted `listening_intervals.seconds`, including
+  short partial listens and interrupted sessions. It never estimates from song
+  duration, wall-clock time, session totals, or play counts. Durations display
+  days/hours/minutes as needed, with seconds for listens under one minute; the
+  summary tooltip and chart value list provide exact recorded seconds.
+- **Total Plays** counts existing `qualified_plays` records. Qualification remains
+  30 seconds of actual listening or half the song duration, whichever comes
+  first. Statistics does not recalculate eligibility.
+- **Unique Songs** counts distinct stable song IDs with positive listening time
+  in that period. A qualified record alone does not add a unique listened song.
+
+**Top Songs** shows up to 10 songs with qualified plays, ordered by play count,
+then listening seconds, then stable song ID. Current available library metadata
+is preferred; unavailable or deleted library records fall back to the latest
+session's title/artist. Cached artwork is optional, with a native placeholder.
+Identical titles never combine distinct song IDs.
+
+**Top Artists** and **Top Albums** rank by actual listening time, including partial
+listens. Artists use the exact historical session artist string, and albums use
+historical artist plus album together. Tag edits do not rewrite these identities.
+Ties sort by case-insensitive names followed by exact names (artist before album
+for albums). Each row includes qualified plays and listening time. There is no
+artist normalization, featured-artist splitting, or external metadata service.
+
+Listening time uses each interval's saved `local_date`. Plays use the UTC
+qualification instant converted through the recorded interval timezone at that
+instant, falling back to the nearest preceding or following interval if needed.
+This handles local midnight, month/year boundaries, and daylight-saving changes
+without applying the computer's current timezone to old events. Invalid legacy
+interval durations are ignored. Invalid dates contribute time only to All Time.
+For an unknown timezone, a containing interval's local date is used when possible;
+otherwise a valid qualification timestamp falls back to UTC. Undated qualified
+records still count in All Time. Recovery limitations appear on the page.
+
+The native bar chart shows **Last 12 Months** for All Time, including zero months;
+the summary and rankings still include older history. A selected month shows
+every calendar day, including zero days and February 29 in leap years. Expand
+**Listening time values** for labeled durations and exact seconds outside the
+chart. Empty periods show zero values and a short explanation.
+
+Entering Statistics refreshes the data; visible pages refresh about every 10
+seconds. The existing tracker checkpoints about every five seconds, so updates
+can lag playback by a few seconds. SQLite reads run on one worker thread using a
+read-only connection and a consistent transaction. Unchanged database versions
+reuse the previous aggregate, and unchanged results preserve existing widgets.
+The refresh timer stops while hidden. Temporary read errors appear on the page
+and retry automatically, without touching playback.
+
+Statistics makes no schema changes or migrations and writes no history,
+preferences, playlists, or library rows. It adds no runtime dependencies.
 
 ## Stored data and architecture
 
@@ -204,6 +265,8 @@ possible. The Statistics interface is not implemented yet.
   transitions. `player_bar.py` renders controls; `shortcuts.py` centralizes GTK
   actions. `history.py` owns listening accounting and atomic persistence. GTK
   widgets do not issue GStreamer operations directly.
+- `statistics.py` returns ordinary immutable Python data from read-only history
+  queries; `statistics_ui.py` handles the GTK page, worker, and native Cairo chart.
 
 The database stores folders, songs with availability, playback sessions,
 listening intervals, qualified plays, and a single volume preference. History
@@ -216,7 +279,7 @@ constraints prevent duplicates, and all bulk edits use transactions. Deleting
 a playlist cascades only to its membership rows. Phase 3 song and listening
 history tables are not rewritten by this migration.
 
-No Statistics UI or MPRIS implementation is included. No software license has
+No MPRIS implementation is included. No software license has
 been selected. Environments, databases, secrets, caches, and test media are not
 committed.
 
@@ -250,9 +313,17 @@ waits 30 real seconds to verify a play-count threshold. Phase 4 adds playlist
 validation, membership/order transactions, migration/history preservation,
 native dialog/context-menu actions, multi-selection, missing-song restoration,
 restart persistence, and queue snapshots during playlist edits and deletion.
+Phase 5 adds controlled statistics databases for aggregation, stable identities,
+historical tags, unavailable/deleted songs, deterministic top-10 ties, partial
+listens, midnight/month/year boundaries, leap years, DST, historical timezones,
+empty periods, read-only preservation, and refresh caching. GTK tests cover
+navigation, period selection, summaries, rankings, chart values, refresh/retry,
+worker responsiveness, continued playback, light/dark themes, and scrolling at
+1040×640 and 720×480. Optional synthetic screenshots can be captured outside the
+repository with `MUSICPLAYER_UI_CAPTURE_DIR=/tmp/musicplayer-ui` when running
+`tests/test_statistics_ui.py`. Personal history and music are never test fixtures.
 
 ## Later phases
 
-A queue editor, hardware media keys, MPRIS, and the Statistics page remain
-future work. Listening history continues to be recorded without adding a
-Statistics interface or desktop media integration.
+A queue editor, hardware media keys, MPRIS, and desktop installation remain
+future work.
