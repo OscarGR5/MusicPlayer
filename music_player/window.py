@@ -120,6 +120,11 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         self._playlist_play = Gtk.Button(label='Play', tooltip_text='Play playlist', visible=False)
         self._playlist_play.connect('clicked', lambda _: self._perform(self._play_playlist))
         toolbar.append(self._playlist_play)
+        self._saved_order = Gtk.Button(label='Saved order', visible=False,
+                                       tooltip_text='Restore saved playlist order')
+        self._saved_order.add_css_class('flat')
+        self._saved_order.connect('clicked', lambda _: self.view.sort_by_column(None, Gtk.SortType.ASCENDING))
+        toolbar.append(self._saved_order)
         self._search = Gtk.SearchEntry(placeholder_text="Search songs, artists, albums")
         self._search.set_size_request(250, -1)
         self._search.connect("search-changed", self._search_changed)
@@ -142,7 +147,11 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         self._add_columns()
         self._all_sort_column = self._title_column
         self._all_sort_order = Gtk.SortType.ASCENDING
-        self.sorted.set_sorter(self.view.get_sorter())
+        sorter = self.view.get_sorter()
+        # Capture IDs before SortListModel handles the signal and changes positions.
+        sorter.connect('changed', self._sort_changing)
+        self.sorted.set_sorter(sorter)
+        sorter.connect_after('changed', self._sort_changed)
         self.view.sort_by_column(self._title_column, Gtk.SortType.ASCENDING)
         scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True,
                                       margin_end=12, overlay_scrolling=False)
@@ -288,6 +297,20 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         for index in range(self.sorted.get_n_items()):
             if self.sorted.get_item(index).song.id in song_ids:
                 self.selection.select_item(index, False)
+
+    def _sort_changing(self, sorter, change):
+        self._sort_selection = {song.id for song in self._selected_songs()}
+
+    def _playlist_sorted(self):
+        return self._playlist_id is not None and self.view.get_sorter().get_primary_sort_column() is not None
+
+    def _sort_changed(self, sorter, change):
+        self._restore_selection(self._sort_selection)
+        self._saved_order.set_visible(self._playlist_sorted())
+        self._close_menu()
+        # Discard move actions from a menu opened before the sort changed.
+        self.lookup_action('playlist-up').set_enabled(False)
+        self.lookup_action('playlist-down').set_enabled(False)
 
     def _song_item(self, song):
         item = SongItem(song)
@@ -541,13 +564,11 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         self._playlist_count.set_visible(playlist is not None)
         self._playlist_play.set_visible(playlist is not None)
         self._rescan.set_visible(playlist is None)
-        for column, sorter in self._column_sorters.items():
-            column.set_sorter(sorter if playlist is None else None)
         if playlist is None:
-            self.sorted.set_sorter(self.view.get_sorter())
             self.view.sort_by_column(self._all_sort_column, self._all_sort_order)
         else:
-            self.sorted.set_sorter(None)
+            self.view.sort_by_column(None, Gtk.SortType.ASCENDING)
+        self._saved_order.set_visible(False)
         self._reload_view(preserve_selection=False)
         self._sidebar_refreshing = True
         self.sidebar.select_row(self._playlist_rows.get(playlist_id, self._all_row))
@@ -620,7 +641,7 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
             menu.append('Move Up', 'win.playlist-up')
             menu.append('Move Down', 'win.playlist-down')
             ids = [song.id for song in self.playlists.songs(self._playlist_id)]
-            single = len(self._context_ids) == 1
+            single = len(self._context_ids) == 1 and not self._playlist_sorted()
             index = ids.index(self._context_ids[0]) if single else -1
             self.lookup_action('playlist-up').set_enabled(single and index > 0)
             self.lookup_action('playlist-down').set_enabled(single and index < len(ids) - 1)
@@ -686,7 +707,8 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
                 self._reload_view()
 
     def _move_playlist_song(self, direction):
-        if self._context_playlist_id is not None and len(self._context_ids) == 1:
+        if (self._context_playlist_id is not None and self._context_playlist_id == self._playlist_id
+                and not self._playlist_sorted() and len(self._context_ids) == 1):
             self.playlists.move(self._context_playlist_id, self._context_ids[0], direction)
             if self._playlist_id == self._context_playlist_id:
                 self._reload_view()

@@ -2,6 +2,7 @@ import hashlib
 import shutil
 import gc
 import weakref
+import sqlite3
 from pathlib import Path
 
 import gi
@@ -188,8 +189,9 @@ def test_empty_playlist_search_order_moves_remove_and_restore_all_sort(library):
         window.playlists.add(playlist.id, saved)
         window._reload_view()
         assert ids(window) == saved
-        assert window.sorted.get_sorter() is None
-        assert all(column.get_sorter() is None for column in window._column_sorters)
+        assert window.view.get_sorter().get_primary_sort_column() is None
+        assert all(column.get_sorter() is not None for column in window._column_sorters)
+        assert not window._saved_order.get_visible()
         assert window._playlist_count.get_text() == '3 songs'
         song = window.sorted.get_item(1).song
         window._search.set_text(song.title)
@@ -335,3 +337,196 @@ def test_keyboard_context_actions_and_pending_dialog_cleanup(library):
         assert window._dialogs
         window.close()
         assert not window._dialogs
+
+
+@pytest.fixture
+def sorting_playlist(library):
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        metadata = [('Zebra', 'Artist B', 'Album C', 61),
+                    ('alpha', 'Artist C', 'Album A', 600),
+                    ('Echo', 'Artist A', 'Album D', 121),
+                    ('bravo', 'Artist D', 'Album B', 9)]
+        with LibraryDatabase(database_path()) as db:
+            db.connection.executemany('UPDATE songs SET title=?,artist=?,album=?,duration=? WHERE id=?',
+                                      ((*values, song.id) for song, values in zip(library, metadata)))
+        saved = [library[index].id for index in (2, 0, 3, 1)]
+        playlist = window.playlists.create('Temporary sorting', saved)
+        window._refresh_sidebar()
+        window.sidebar.select_row(window._playlist_rows[playlist.id])
+        yield window, playlist, [song.id for song in library], saved
+
+
+def database_snapshot():
+    with sqlite3.connect(database_path().as_uri() + '?mode=ro', uri=True) as db:
+        return tuple(db.iterdump())
+
+
+@pytest.mark.parametrize('column,ascending', [
+    (1, (1, 3, 2, 0)),  # Title, case insensitive
+    (2, (2, 0, 1, 3)),  # Artist
+    (3, (1, 3, 0, 2)),  # Album
+    (4, (3, 0, 2, 1)),  # Numeric duration: 9, 61, 121, 600
+])
+def test_playlist_column_sort_both_directions_and_saved_order(sorting_playlist, column, ascending):
+    window, playlist, songs, saved = sorting_playlist
+    before = database_snapshot()
+    assert ids(window) == saved
+    assert not window._saved_order.get_visible()
+    header = window.view.get_columns().get_item(column)
+    for direction, order in ((Gtk.SortType.ASCENDING, ascending),
+                             (Gtk.SortType.DESCENDING, ascending[::-1])):
+        window.view.sort_by_column(header, direction)
+        assert ids(window) == [songs[index] for index in order]
+        assert window._saved_order.get_visible()
+        assert members(window, playlist.id) == saved
+    window._saved_order.emit('clicked')
+    assert ids(window) == saved
+    assert window.view.get_sorter().get_primary_sort_column() is None
+    assert not window._saved_order.get_visible()
+    assert database_snapshot() == before
+
+
+def test_sorted_playlist_search_and_multiselection_follow_song_ids(sorting_playlist):
+    window, playlist, songs, saved = sorting_playlist
+    # Keep the same two songs through direction changes, other columns and reset.
+    window.selection.select_item(0, True)
+    window.selection.select_item(2, False)
+    selected = {saved[0], saved[2]}
+    for column, direction in ((1, Gtk.SortType.ASCENDING), (1, Gtk.SortType.DESCENDING),
+                              (4, Gtk.SortType.ASCENDING), (2, Gtk.SortType.DESCENDING)):
+        window.view.sort_by_column(window.view.get_columns().get_item(column), direction)
+        assert {song.id for song in window._selected_songs()} == selected
+    window._saved_order.emit('clicked')
+    assert {song.id for song in window._selected_songs()} == selected
+    window.view.sort_by_column(window._title_column, Gtk.SortType.ASCENDING)
+    window._search.set_text('a')
+    wait_for(lambda: window._query == 'a')
+    # Narrow with multiple terms while retaining the column sort.
+    window._search.set_text('bravo album b')
+    wait_for(lambda: window._query == 'bravo album b')
+    assert ids(window) == [songs[3]]
+    window.selection.select_item(0, True)
+    window.view.sort_by_column(window._title_column, Gtk.SortType.DESCENDING)
+    assert [song.id for song in window._selected_songs()] == [songs[3]]
+    window._search.set_text('br')
+    wait_for(lambda: window._query == 'br')
+    assert ids(window) == [songs[0], songs[3]]
+    window.view.sort_by_column(window._title_column, Gtk.SortType.ASCENDING)
+    assert ids(window) == [songs[3], songs[0]]
+    window._saved_order.emit('clicked')
+    assert ids(window) == [songs[0], songs[3]]
+    assert [song.id for song in window._selected_songs()] == [songs[3]]
+    window._search.set_text('nothing matches')
+    wait_for(lambda: window.filtered.get_n_items() == 0)
+    window.view.sort_by_column(window._title_column, Gtk.SortType.ASCENDING)
+    window._search.set_text('')
+    wait_for(lambda: window.filtered.get_n_items() == 4)
+    assert ids(window) == [songs[index] for index in (1, 3, 2, 0)]
+    assert members(window, playlist.id) == saved
+
+
+def test_sorted_playlist_play_and_activation_use_independent_queue_snapshots(sorting_playlist):
+    window, playlist, songs, saved = sorting_playlist
+    window.view.sort_by_column(window._title_column, Gtk.SortType.ASCENDING)
+    window._search.set_text('br')
+    wait_for(lambda: window.filtered.get_n_items() == 2)
+    window._playlist_play.emit('clicked')
+    wait_for(lambda: window.controller.state == 'playing')
+    assert [song.id for song in window.controller.queue] == saved
+    assert window.controller.current_song_id == saved[0]
+    queue = window.controller.queue
+    window.view.sort_by_column(window._title_column, Gtk.SortType.DESCENDING)
+    assert window.controller.queue is queue
+    assert ids(window) == [songs[0], songs[3]]
+    window.view.emit('activate', 1)
+    assert window.controller.current_song_id == songs[3]
+    assert [song.id for song in window.controller.queue] == [songs[0], songs[3]]
+    queue = window.controller.queue
+    window._saved_order.emit('clicked')
+    window._search.set_text('')
+    wait_for(lambda: window.filtered.get_n_items() == 4)
+    window.view.sort_by_column(window._title_column, Gtk.SortType.ASCENDING)
+    assert window.controller.queue is queue
+    assert window.controller.current_song_id == songs[3]
+    assert members(window, playlist.id) == saved
+
+
+def test_switch_views_resets_playlist_sort_and_restores_all_songs_sort(sorting_playlist):
+    window, playlist, songs, saved = sorting_playlist
+    other = window.playlists.create('Other', saved[::-1])
+    window._refresh_sidebar()
+    window.sidebar.select_row(window._all_row)
+    album = window.view.get_columns().get_item(3)
+    window.view.sort_by_column(album, Gtk.SortType.DESCENDING)
+    all_order = ids(window)
+    window.selection.select_item(0, True)
+    selected = window._selected_songs()[0].id
+    window.view.sort_by_column(album, Gtk.SortType.ASCENDING)
+    assert [song.id for song in window._selected_songs()] == [selected]
+    window.view.sort_by_column(album, Gtk.SortType.DESCENDING)
+    window.sidebar.select_row(window._playlist_rows[playlist.id])
+    assert ids(window) == saved
+    assert not window._saved_order.get_visible()
+    window.view.sort_by_column(window._title_column, Gtk.SortType.ASCENDING)
+    window.sidebar.select_row(window._playlist_rows[other.id])
+    assert ids(window) == saved[::-1]
+    assert window.view.get_sorter().get_primary_sort_column() is None
+    assert not window._saved_order.get_visible()
+    window.view.sort_by_column(window._title_column, Gtk.SortType.DESCENDING)
+    window.sidebar.select_row(window._playlist_rows[playlist.id])
+    assert ids(window) == saved
+    window.sidebar.select_row(window._all_row)
+    assert ids(window) == all_order
+    assert window.view.get_sorter().get_primary_sort_column() == album
+    assert window.view.get_sorter().get_primary_sort_order() == Gtk.SortType.DESCENDING
+    assert not window._saved_order.get_visible()
+
+
+def test_temporary_sort_does_not_persist_after_restart(sorting_playlist):
+    window, playlist, songs, saved = sorting_playlist
+    before = database_snapshot()
+    window.view.sort_by_column(window._title_column, Gtk.SortType.ASCENDING)
+    assert ids(window) != saved
+    window.close()
+    with open_window() as restarted:
+        wait_for(lambda: not restarted.scanner.running)
+        restarted.sidebar.select_row(restarted._playlist_rows[playlist.id])
+        assert ids(restarted) == saved
+        assert not restarted._saved_order.get_visible()
+        assert members(restarted, playlist.id) == saved
+        assert database_snapshot() == before
+
+
+def test_move_actions_disabled_while_sorted_and_restored_in_saved_order(sorting_playlist):
+    window, playlist, songs, saved = sorting_playlist
+    window._show_song_menu(1)
+    assert window.lookup_action('playlist-up').get_enabled()
+    assert window.lookup_action('playlist-down').get_enabled()
+    before = database_snapshot()
+    window.view.sort_by_column(window._title_column, Gtk.SortType.ASCENDING)
+    assert not window._popover.get_visible()
+    for action in ('playlist-up', 'playlist-down'):
+        assert not window.lookup_action(action).get_enabled()
+        window.activate_action(f'win.{action}', None)
+    window._show_song_menu(1)
+    for action in ('playlist-up', 'playlist-down'):
+        assert not window.lookup_action(action).get_enabled()
+        window.activate_action(f'win.{action}', None)
+    # The callback also rejects stale/direct requests while sorted.
+    window._move_playlist_song(-1)
+    window._move_playlist_song(1)
+    assert database_snapshot() == before
+    window._saved_order.emit('clicked')
+    assert ids(window) == saved
+    window._show_song_menu(1)
+    assert window.lookup_action('playlist-up').get_enabled()
+    assert window.lookup_action('playlist-down').get_enabled()
+    window.activate_action('win.playlist-up', None)
+    assert ids(window) == [saved[1], saved[0], saved[2], saved[3]]
+    assert members(window, playlist.id) == ids(window)
+    assert [song.id for song in window._selected_songs()] == [saved[1]]
+    window._show_song_menu(0)
+    window.activate_action('win.playlist-down', None)
+    assert ids(window) == saved
+    assert members(window, playlist.id) == saved
