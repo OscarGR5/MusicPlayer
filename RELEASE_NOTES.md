@@ -1,7 +1,5 @@
 # MusicPlayer v0.7.0
 
-Draft release notes for review. No release or tag has been published.
-
 MusicPlayer is a lightweight native GTK4 player for your local music collection,
 with a dark interface, playlists, and listening statistics. This first release
 is primarily tested on Fedora GNOME/Wayland.
@@ -20,7 +18,7 @@ is primarily tested on Fedora GNOME/Wayland.
 
 ## Install and launch on Fedora
 
-Follow the [README installation instructions](README.md#fedora-installation-and-launch)
+Follow the [README installation instructions](https://github.com/OscarGR5/MusicPlayer/blob/v0.7.0/README.md#fedora-installation-and-launch)
 for system packages, checkout setup, and launch commands. Python 3.10+, GTK4
 4.12+, GStreamer, PyGObject, GdkPixbuf, and Mutagen are required. The optional
 launcher runs from the existing checkout and virtual environment.
@@ -44,9 +42,9 @@ that path using a tested, application-owned GTK file chooser with explicit
 cleanup when dismissed or during shutdown. This temporary workaround uses the
 deprecated `Gtk.FileChooserDialog` API; it does not fix GTK itself or require
 system portal configuration changes. See the
-[GTK compatibility investigation](PORTAL_SHUTDOWN_INVESTIGATION.md) for details.
+[GTK compatibility investigation](https://github.com/OscarGR5/MusicPlayer/blob/v0.7.0/PORTAL_SHUTDOWN_INVESTIGATION.md) for details.
 
-## Before publication
+## License
 
-No software license has been selected. Resolve licensing before public
-distribution. These notes are a draft and do not authorize publication.
+MusicPlayer is licensed under the [MIT License](https://github.com/OscarGR5/MusicPlayer/blob/v0.7.0/LICENSE).
+Copyright (c) 2026 OscarGR5. Third-party dependencies retain their own licenses.

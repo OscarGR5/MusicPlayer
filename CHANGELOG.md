@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.7.0
+## 0.7.0 - 2026-10-29
 
-First release, being prepared for review.
+First release, licensed under the [MIT License](LICENSE).
 
 - Native GTK4 interface with a dark appearance and a permanent player bar.
 - Recursive local music scanning, incremental library refresh, metadata, and

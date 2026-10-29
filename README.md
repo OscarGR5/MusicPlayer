@@ -4,7 +4,7 @@ A lightweight native GTK4 music library and player for local files, with a dark
 interface, persistent playlists, and listening statistics. Primarily tested on
 Fedora GNOME/Wayland. No accounts, streaming, web server, or browser process.
 
-MusicPlayer v0.7.0 is the first release being prepared. See the
+MusicPlayer v0.7.0 is the first release. See the
 [changelog](CHANGELOG.md) for its contents.
 
 ## Fedora installation and launch
@@ -298,6 +298,9 @@ alone does not establish Wayland behavior.
 
 ## Licensing
 
-No software license has been selected or granted in this repository. A license
-is a decision to make before public distribution; no license is added as part of
-v0.7.0 preparation.
+MusicPlayer is licensed under the [MIT License](LICENSE).
+Copyright (c) 2026 OscarGR5.
+
+Third-party dependencies, including GTK, PyGObject, GStreamer, and Mutagen,
+retain their own licenses and copyrights. They are not vendored or relicensed
+by this project. The bundled MusicPlayer SVG icon is original project artwork.
