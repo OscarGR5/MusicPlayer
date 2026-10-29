@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install native test dependencies
         run: |
           sudo apt-get update
@@ -20,13 +20,18 @@ jobs:
             python3-mutagen python3-pytest gir1.2-gtk-4.0 gir1.2-gstreamer-1.0 \
             gir1.2-gdkpixbuf-2.0 gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-            gstreamer1.0-libav ffmpeg xvfb dbus-x11 desktop-file-utils
+            gstreamer1.0-libav ffmpeg xvfb openbox dbus-x11 desktop-file-utils
       - name: Run isolated GTK, audio, database, and D-Bus tests
         env:
           GDK_BACKEND: x11
           GSK_RENDERER: cairo
           GTK_A11Y: none
-        run: xvfb-run -a dbus-run-session -- /usr/bin/python3 -m pytest -q
+        # A window manager honors GTK client-size requests, including CSD.
+        run: |
+          xvfb-run -a dbus-run-session -- sh -c '
+            openbox > /tmp/musicplayer-window-manager.log 2>&1 &
+            exec /usr/bin/python3 -m pytest -q
+          '
       - name: Syntax and whitespace
         run: |
           /usr/bin/python3 -m compileall -q music_player desktop tests
