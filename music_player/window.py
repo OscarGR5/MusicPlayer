@@ -10,6 +10,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .controller import PlaybackController
 from .player_bar import PlayerBar
+from .statistics_ui import StatisticsIcon, StatisticsPage
 from .shortcuts import WindowShortcuts
 from .library import LibraryDatabase
 from .playlists import PlaylistStore
@@ -28,6 +29,7 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         self.scanner = None
         self._items = {}
         self._query = ""
+        self._statistics_visible = False
         self._playlist_id = None
         self._playlist_rows = {}
         self._sidebar_refreshing = False
@@ -77,6 +79,8 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         self.sidebar.set_size_request(160, -1)
         self._all_row = self._sidebar_row('All Songs', 'audio-x-generic-symbolic', None)
         self.sidebar.append(self._all_row)
+        self._statistics_row = self._sidebar_row('Statistics', StatisticsIcon(), None)
+        self.sidebar.append(self._statistics_row)
         section = Gtk.Box(spacing=4)
         label = Gtk.Label(label='PLAYLISTS', xalign=0, hexpand=True)
         label.add_css_class('dim-label')
@@ -96,7 +100,12 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         body.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
 
         main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True)
-        body.append(main)
+        self._content_stack = Gtk.Stack(hexpand=True, vexpand=True)
+        body.append(self._content_stack)
+        self._content_stack.add_named(main, 'library')
+        self.statistics = StatisticsPage(self._database)
+        self._content_stack.add_named(self.statistics, 'statistics')
+        self._content_stack.set_visible_child_name('library')
         toolbar = Gtk.Box(spacing=12)
         self._margins(toolbar, 12)
         headings = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, valign=Gtk.Align.CENTER)
@@ -440,6 +449,7 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
             GLib.source_remove(self._tick_source)
         if hasattr(self, 'bar'):
             self.bar.cancel_seek()
+        self.statistics.close()
         if self.scanner is not None:
             self.scanner.close()
         if self._chooser is not None:
@@ -453,7 +463,7 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
 
     def _sidebar_row(self, name, icon, playlist_id):
         content = Gtk.Box(spacing=10)
-        content.append(Gtk.Image.new_from_icon_name(icon))
+        content.append(Gtk.Image.new_from_icon_name(icon) if isinstance(icon, str) else icon)
         label = Gtk.Label(label=name, xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END, max_width_chars=16)
         label.set_tooltip_text(name)
         content.append(label)
@@ -477,14 +487,23 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
             self._playlist_rows[playlist.id] = row
             self.sidebar.append(row)
         selected = self._playlist_rows.get(self._playlist_id, self._all_row)
-        self.sidebar.select_row(selected)
+        self.sidebar.select_row(self._statistics_row if self._statistics_visible else selected)
         self._sidebar_refreshing = False
 
     def _sidebar_selected(self, sidebar, row):
         if not self._sidebar_refreshing and row is not None:
-            self._perform(lambda: self._show_view(row.playlist_id))
+            if row is self._statistics_row:
+                self._close_menu()
+                self._statistics_visible = True
+                self._content_stack.set_visible_child_name('statistics')
+                self.statistics.set_active(True)
+            else:
+                self._perform(lambda: self._show_view(row.playlist_id))
 
     def _show_view(self, playlist_id):
+        self.statistics.set_active(False)
+        self._statistics_visible = False
+        self._content_stack.set_visible_child_name('library')
         if playlist_id == self._playlist_id:
             return
         if self._playlist_id is None:
@@ -592,6 +611,8 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
 
     def _keyboard_context_menu(self):
+        if self._statistics_visible:
+            return
         focus = self.get_focus()
         if focus is not None and (focus is self.sidebar or focus.is_ancestor(self.sidebar)):
             row = self.sidebar.get_selected_row()
