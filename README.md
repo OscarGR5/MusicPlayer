@@ -113,6 +113,49 @@ minimum width; the library table can scroll horizontally in narrow windows.
 These are in-app GTK actions. No global media keys or desktop keyboard hooks
 are implemented; MPRIS is reserved for a later phase.
 
+## Playlists
+
+Use **+** beside **PLAYLISTS** in the sidebar to create a playlist. Names are
+trimmed, must contain 1–80 characters, and must be unique without regard to case
+(including Unicode case folding). Validation errors stay in the name dialog.
+Right-click a playlist to rename or delete it. Deletion requires confirmation
+and removes only that playlist and its memberships, keeping music and history.
+
+In All Songs, use Ctrl+Click or Shift+Click to select songs, then right-click
+and choose **Add to Playlist**. Right-clicking a selected row uses the whole
+selection; right-clicking an unselected row selects just that song. Songs are
+appended in current visible order. Repeated additions quietly skip existing
+members. If there are no playlists, the menu offers **Create Playlist** and
+adds the selected songs as part of the same transaction.
+
+Choose a playlist in the sidebar to browse its saved order. Its heading shows
+the name, total membership count, and a **Play** button. Search applies only to
+that playlist. The playlist Play button starts the first available track in
+saved order, independently of a search filter. Double-clicking a song instead
+starts a queue from the currently visible, filtered playlist. Both reuse the
+existing shuffle/repeat settings and permanent player bar.
+
+Playlist columns do not apply temporary sorting. Select exactly one song and
+use **Move Up** or **Move Down** from its context menu to change saved order;
+the actions are disabled at the corresponding saved-order boundaries. With a
+search active, moving still operates on the full saved order. Select one or
+more songs and choose **Remove from Playlist** to remove memberships. No music
+file or All Songs record is deleted. All Songs retains its column sorting.
+
+Unavailable members remain in playlists with dimmed text and an Unavailable
+label/tooltip. They cannot be activated directly and are skipped during
+navigation. Rescanning after restoring files makes them available again with
+their original song IDs. Use All Songs to access **Rescan Library**.
+
+Switching views, searching, editing order or memberships, and deleting a
+playlist do not change an active playback queue. A new playback activation
+creates a fresh snapshot. Playlists and their saved order persist across
+application restarts; the application starts in All Songs.
+
+Use **Shift+F10** or the **Menu** key to open the song context menu for the
+current selection, or the playlist menu when its sidebar row has focus. Space
+is left to native menu handling while a popover has focus.
+
 ## Listening history
 
 Listening time and play counts are separate. One session qualifies for one play
@@ -166,8 +209,15 @@ The database stores folders, songs with availability, playback sessions,
 listening intervals, qualified plays, and a single volume preference. History
 foreign keys do not cascade-delete song identities. Scans release SQLite write
 locks before parsing the next song so history checkpoints can proceed.
-No playlists, Statistics UI, or MPRIS implementation is included. No software license has been
-selected. Environments, databases, secrets, caches, and test media are not
+`playlists.py` provides playlist persistence separately from GTK and playback.
+Two additive tables store playlists and ordered memberships; a normalized name
+key enforces Unicode case-insensitive uniqueness. Membership and position
+constraints prevent duplicates, and all bulk edits use transactions. Deleting
+a playlist cascades only to its membership rows. Phase 3 song and listening
+history tables are not rewritten by this migration.
+
+No Statistics UI or MPRIS implementation is included. No software license has
+been selected. Environments, databases, secrets, caches, and test media are not
 committed.
 
 ## Tests
@@ -196,10 +246,13 @@ adds deterministic queue/shuffle/repeat/navigation tests, audio seeking and
 buffering checks, player controls/actions/seek debounce tests, and simulated
 clock tests for thresholds, skips, seeks, stalls, midnight/month boundaries,
 metadata snapshots, migration, checkpoint retries, and crash recovery. No test
-waits 30 real seconds to verify a play-count threshold.
+waits 30 real seconds to verify a play-count threshold. Phase 4 adds playlist
+validation, membership/order transactions, migration/history preservation,
+native dialog/context-menu actions, multi-selection, missing-song restoration,
+restart persistence, and queue snapshots during playlist edits and deletion.
 
 ## Later phases
 
-Playlists, a queue editor, hardware media keys, MPRIS, and the Statistics page
-remain future work. Phase 3 stores the underlying listening history now, without
-adding those interfaces or integrations.
+A queue editor, hardware media keys, MPRIS, and the Statistics page remain
+future work. Listening history continues to be recorded without adding a
+Statistics interface or desktop media integration.

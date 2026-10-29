@@ -17,13 +17,15 @@ class WindowShortcuts:
             'mute': (controller.toggle_mute, '<Primary>m'),
             'open': (lambda: window._open_file(None), '<Primary>o'),
             'search': (window._search.grab_focus, '<Primary>f'),
+            'context-menu': (window._keyboard_context_menu, ['<Shift>F10', 'Menu']),
         }
         for name, (callback, accelerator) in bindings.items():
             action = Gio.SimpleAction.new(name, None)
             action.connect('activate', lambda action, parameter, callback=callback: window._perform(callback))
             window.add_action(action)
             if accelerator:
-                window.get_application().set_accels_for_action(f'win.{name}', [accelerator])
+                accelerators = [accelerator] if isinstance(accelerator, str) else accelerator
+                window.get_application().set_accels_for_action(f'win.{name}', accelerators)
         shortcut_controller = Gtk.ShortcutController.new()
         shortcut_controller.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         shortcut_controller.add_shortcut(Gtk.Shortcut.new(
@@ -35,7 +37,7 @@ class WindowShortcuts:
     def space(self, widget=None, arguments=None, user_data=None):
         focused = self.window.get_focus()
         while focused is not None:
-            if isinstance(focused, Gtk.Editable) or isinstance(focused, Gtk.TextView) and focused.get_editable():
+            if isinstance(focused, (Gtk.Editable, Gtk.Popover)) or isinstance(focused, Gtk.TextView) and focused.get_editable():
                 return False
             focused = focused.get_parent()
         self.window.activate_action('win.play-pause', None)

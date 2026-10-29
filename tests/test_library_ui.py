@@ -35,6 +35,7 @@ def open_window(size=None):
         window.set_default_size(*size)
     window.present()
     try:
+        wait_for(lambda: window.view.get_mapped() and window.view.get_width() > 0)
         yield window
     finally:
         window.close()
@@ -162,12 +163,12 @@ def test_existing_index_visible_while_worker_runs_and_main_thread_stays_responsi
             assert window._rescan.get_sensitive()
             assert window.store.get_n_items() == 1
             # A background refresh keeps the persistent song ID and selection.
-            window.selection.set_selected(0)
-            selected_id = window.selection.get_selected_item().song.id
+            window.selection.select_item(0, True)
+            selected_id = window._selected_songs()[0].id
             path.touch()
             window._rescan.emit("clicked")
             wait_for(lambda: not window.scanner.running)
-            assert window.selection.get_selected_item().song.id == selected_id
+            assert window._selected_songs()[0].id == selected_id
             with LibraryDatabase(database_path()) as db:
                 assert db.songs()[0].id == selected_id
     finally:
