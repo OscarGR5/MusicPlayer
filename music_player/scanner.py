@@ -39,7 +39,7 @@ def scan_library(database, cache, cancelled, on_batch, on_progress):
     batch = []
     last_update = time.monotonic()
     with LibraryDatabase(database) as db:
-        existing = {song.path: song for song in db.songs()}
+        existing = {song.path: song for song in db.songs(include_unavailable=True)}
 
         def flush():
             nonlocal last_update
@@ -65,11 +65,14 @@ def scan_library(database, cache, cancelled, on_batch, on_progress):
                 seen.add(str(path))
                 checked += 1
                 metadata = None
+                restore_id = None
                 try:
                     stat = path.stat()
                     previous = existing.get(str(path))
                     unchanged = previous and previous.mtime_ns == stat.st_mtime_ns and previous.size == stat.st_size
                     cached = previous and (not previous.artwork_path or Path(previous.artwork_path).is_file())
+                    if unchanged and cached and not previous.available:
+                        restore_id = previous.id
                     if not (unchanged and cached):
                         metadata = read_metadata(path)
                         thumbnail = cache_artwork(metadata.artwork, cache)
@@ -83,9 +86,19 @@ def scan_library(database, cache, cancelled, on_batch, on_progress):
                     logger.warning("Skipping audio file %s: %s", path, exc)
                     skipped += 1
                     metadata = None
+                    restore_id = None
+                if restore_id is not None:
+                    song = db.restore(restore_id)
+                    db.commit()
+                    existing[str(path)] = song
+                    batch.append(song)
+                    updated += 1
                 if metadata is not None:
                     # Database failures abort visibly rather than being counted as bad media.
                     song = db.upsert(folder["id"], path, metadata, stat, thumbnail)
+                    # Never hold the write lock while parsing the next file.
+                    # Listening checkpoints use another connection on the GTK thread.
+                    db.commit()
                     existing[str(path)] = song
                     batch.append(song)
                     updated += 1
@@ -95,7 +108,7 @@ def scan_library(database, cache, cancelled, on_batch, on_progress):
                 warnings.append(f"Some files in {root} could not be read; existing entries were retained")
             elif not cancelled.is_set():
                 missing = [song.id for song in existing.values()
-                           if song.folder_id == folder["id"] and song.path not in seen]
+                           if song.available and song.folder_id == folder["id"] and song.path not in seen]
                 db.remove(missing)
                 removed.extend(missing)
         flush()

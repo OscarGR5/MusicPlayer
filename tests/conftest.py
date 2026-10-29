@@ -51,3 +51,30 @@ def player():
     instance.pipeline.set_property("audio-sink", sink)
     yield instance, statuses
     instance.close()
+
+
+@pytest.fixture
+def indexed_songs(user_directories, wav_file):
+    import shutil
+    from music_player.metadata import Metadata
+
+    songs = []
+    with LibraryDatabase(database_path()) as db:
+        folder_id = db.folders()[0]['id']
+        for index in range(4):
+            path = user_directories / f'song-{index}.wav'
+            shutil.copyfile(wav_file, path)
+            songs.append(db.upsert(folder_id, path, Metadata(f'Song {index}', 'Original artist', 'Original album', 120),
+                                   path.stat(), None))
+    return songs
+
+
+@pytest.fixture
+def long_wav_file(wav_file, tmp_path):
+    path = tmp_path / 'long-tone.wav'
+    with wave.open(str(wav_file), 'rb') as source:
+        frames, params = source.readframes(source.getnframes()), source.getparams()
+    with wave.open(str(path), 'wb') as output:
+        output.setparams(params)
+        output.writeframes(frames * 12)
+    return path

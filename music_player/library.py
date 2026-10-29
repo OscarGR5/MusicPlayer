@@ -17,6 +17,7 @@ class Song:
     mtime_ns: int
     size: int
     artwork_path: str | None
+    available: bool = True
 
 
 class LibraryDatabase:
@@ -45,6 +46,11 @@ class LibraryDatabase:
                 artwork_path TEXT
             );
         """)
+        # Phase 2 databases have no availability column. Retain every existing ID.
+        columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(songs)")}
+        if "available" not in columns:
+            self.connection.execute("ALTER TABLE songs ADD COLUMN available INTEGER NOT NULL DEFAULT 1")
+            self.connection.commit()
 
     def configure_default_folder(self, folder):
         if not self.folders():
@@ -54,8 +60,13 @@ class LibraryDatabase:
     def folders(self):
         return self.connection.execute("SELECT id, path FROM folders ORDER BY id").fetchall()
 
-    def songs(self):
-        return [Song(**dict(row)) for row in self.connection.execute("SELECT * FROM songs ORDER BY id")]
+    def songs(self, include_unavailable=False):
+        where = "" if include_unavailable else " WHERE available = 1"
+        return [Song(**dict(row)) for row in self.connection.execute("SELECT * FROM songs" + where + " ORDER BY id")]
+
+    def song_at_path(self, path):
+        row = self.connection.execute("SELECT * FROM songs WHERE path = ?", (str(Path(path).resolve()),)).fetchone()
+        return Song(**dict(row)) if row else None
 
     def upsert(self, folder_id, path, metadata, stat, artwork_path):
         self.connection.execute("""
@@ -64,14 +75,20 @@ class LibraryDatabase:
             ON CONFLICT(path) DO UPDATE SET
                 folder_id=excluded.folder_id, title=excluded.title,
                 artist=excluded.artist, album=excluded.album, duration=excluded.duration,
-                mtime_ns=excluded.mtime_ns, size=excluded.size, artwork_path=excluded.artwork_path
+                mtime_ns=excluded.mtime_ns, size=excluded.size, artwork_path=excluded.artwork_path, available=1
         """, (folder_id, str(path), metadata.title, metadata.artist, metadata.album,
               metadata.duration, stat.st_mtime_ns, stat.st_size, artwork_path))
         row = self.connection.execute("SELECT * FROM songs WHERE path = ?", (str(path),)).fetchone()
         return Song(**dict(row))
 
     def remove(self, ids):
-        self.connection.executemany("DELETE FROM songs WHERE id = ?", ((id_,) for id_ in ids))
+        # Remove from the active index, retaining identities referenced by history.
+        self.connection.executemany("UPDATE songs SET available = 0 WHERE id = ?", ((id_,) for id_ in ids))
+
+    def restore(self, song_id):
+        self.connection.execute("UPDATE songs SET available = 1 WHERE id = ?", (song_id,))
+        row = self.connection.execute("SELECT * FROM songs WHERE id = ?", (song_id,)).fetchone()
+        return Song(**dict(row))
 
     def commit(self):
         self.connection.commit()

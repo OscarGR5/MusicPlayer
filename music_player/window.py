@@ -8,7 +8,9 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gio, GLib, Gtk, Pango  # noqa: E402
 
-from .audio import AudioPlayer
+from .controller import PlaybackController
+from .player_bar import PlayerBar
+from .shortcuts import WindowShortcuts
 from .library import LibraryDatabase
 from .paths import database_path, thumbnail_directory
 from .scanner import LibraryScanner
@@ -25,12 +27,16 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         self.scanner = None
         self._items = {}
         self._query = ""
-        self._status = Gtk.Label(label="Select a song to play.", xalign=0, ellipsize=Pango.EllipsizeMode.END)
-        self._filename = Gtk.Label(label="Nothing playing", xalign=0, ellipsize=Pango.EllipsizeMode.END)
-        self.player = AudioPlayer(self._playback_status)
+        self._database = database_path()
+        try:
+            self.controller = PlaybackController(self._database, self._playback_changed)
+        except (OSError, sqlite3.Error) as exc:
+            raise RuntimeError(f'Could not open listening history: {exc}') from exc
+        self.player = self.controller.audio
         self._build_interface()
         self.connect("close-request", self._on_close)
-        self._database = database_path()
+        self.shortcuts = WindowShortcuts(self)
+        self._tick_source = GLib.timeout_add(250, self._tick)
         try:
             with LibraryDatabase(self._database) as db:
                 db.configure_default_folder(Path.home() / "Music")
@@ -118,21 +124,11 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         main.append(scan_row)
 
         root.append(Gtk.Separator())
-        playback = Gtk.Box(spacing=8)
-        self._margins(playback, 12)
-        self._controls = []
-        for label, action in (("Play / Resume", self._play_selected), ("Pause", self.player.pause), ("Stop", self.player.stop)):
-            button = Gtk.Button(label=label, sensitive=False)
-            button.connect("clicked", lambda _, action=action: self._perform(action))
-            playback.append(button)
-            self._controls.append(button)
-        details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
-        details.set_margin_start(8)
-        self._status.add_css_class("dim-label")
-        details.append(self._filename)
-        details.append(self._status)
-        playback.append(details)
-        root.append(playback)
+        self.bar = PlayerBar(self.controller, self._perform)
+        self._status = self.bar.status
+        self._filename = self.bar.title
+        root.append(self.bar)
+        self._update_controls()
 
     @staticmethod
     def _margins(widget, amount):
@@ -269,40 +265,47 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         self._update_count()
 
     def _activate_song(self, view, position):
-        item = self.sorted.get_item(position)
-        if item is not None:
+        if self.sorted.get_item(position) is not None:
             self.selection.set_selected(position)
-            self._perform(lambda: self._load_and_play(item.song))
+            snapshot = [self.sorted.get_item(index).song for index in range(self.sorted.get_n_items())]
+            self._perform(lambda: self.controller.activate(snapshot, position))
 
     def _load_and_play(self, song):
-        self.player.load(song.path)
-        self._filename.set_text(f"{song.title} · {song.artist}")
-        self._filename.set_tooltip_text(self._filename.get_text())
-        self._update_controls()
-        self.player.play()
+        self.controller.activate([song])
 
     def _play_selected(self):
-        item = self.selection.get_selected_item()
-        if item is not None and self.player.path != Path(item.song.path):
-            self._load_and_play(item.song)
+        if self.controller.current is None and self.controller.audio.path is None:
+            position = self.selection.get_selected()
+            if position != Gtk.INVALID_LIST_POSITION:
+                self._activate_song(self.view, position)
         else:
-            self.player.play()
+            self.controller.play_pause()
 
-    def _playback_status(self, text):
-        self._show_status(text)
-        for item in self._items.values():
-            item.playing = text == "Playing" and self.player.path == Path(item.song.path)
+    def _playback_changed(self, event):
+        if self._closed or not hasattr(self, 'bar'):
+            return
+        self.bar.update(event)
+        if event in ('track', 'state'):
+            for item in self._items.values():
+                item.playing = self.controller.state == 'playing' and item.song.id == self.controller.current_song_id
+            if event == 'track' and self.controller.current_song_id is not None:
+                self._select_id(self.controller.current_song_id)
+        self._update_controls()
+
+    def _update_controls(self):
+        if hasattr(self, 'bar'):
+            self.bar.play.set_sensitive(self.controller.current is not None or self.player.path is not None or
+                                        self.selection.get_selected_item() is not None)
 
     def _show_status(self, text):
         self._status.set_text(text)
         self._status.set_tooltip_text(text)
 
-    def _update_controls(self):
-        loaded = self.player.path is not None
-        if hasattr(self, "_controls"):
-            self._controls[0].set_sensitive(loaded or self.selection.get_selected_item() is not None)
-            for button in self._controls[1:]:
-                button.set_sensitive(loaded)
+    def _tick(self):
+        if self._closed:
+            return GLib.SOURCE_REMOVE
+        self.controller.tick()
+        return GLib.SOURCE_CONTINUE
 
     def _perform(self, action):
         try:
@@ -327,9 +330,7 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
                 path = file.get_path() if file is not None else None
                 if path is None:
                     raise ValueError("Only local files are supported.")
-                self.player.load(path)
-                self._filename.set_text(self.player.path.name)
-                self._update_controls()
+                self.controller.open_file(path)
         except (OSError, ValueError, RuntimeError) as exc:
             self._show_status(f"Error: {exc}")
         finally:
@@ -337,13 +338,19 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
             self._chooser = None
 
     def close_player(self):
+        if self._closed:
+            return
         self._closed = True
+        if hasattr(self, '_tick_source'):
+            GLib.source_remove(self._tick_source)
+        if hasattr(self, 'bar'):
+            self.bar.cancel_seek()
         if self.scanner is not None:
             self.scanner.close()
         if self._chooser is not None:
             self._chooser.destroy()
             self._chooser = None
-        self.player.close()
+        self.controller.close()
 
     def _on_close(self, window):
         self.close_player()
