@@ -10,7 +10,7 @@ from test_audio import wait_for
 
 
 @pytest.mark.skipif(not Gtk.init_check(), reason="No graphical display available")
-def test_window_startup_reactivation_and_close(wav_file):
+def test_window_startup_reactivation_and_close(wav_file, monkeypatch):
     app = MusicPlayerApplication()
     app.set_application_id("io.github.OscarGR5.MusicPlayer.Tests")
     failures = []
@@ -23,8 +23,13 @@ def test_window_startup_reactivation_and_close(wav_file):
             windows.append(window)
             assert window.get_title() == "MusicPlayer"
             assert window.player.path is None
+            # Reactivation must reuse an unfocused/not-yet-focused window too.
+            monkeypatch.setattr(app, 'get_active_window', lambda: None)
             app.activate()
             assert len(app.get_windows()) == 1
+            assert Gtk.Window.get_default_icon_name() == 'io.github.OscarGR5.MusicPlayer'
+            from gi.repository import Gdk
+            assert Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).has_icon('io.github.OscarGR5.MusicPlayer')
             window.player.load(wav_file)
             window.player.play()
             wait_for(lambda: window._status.get_text() == "Playing")

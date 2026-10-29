@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=MusicPlayer
+Comment=Lightweight local music player
+Type=Application
+Categories=Audio;Music;Player;
+Terminal=false
+Exec=@EXEC@
+TryExec=@PYTHON@
+Icon=io.github.OscarGR5.MusicPlayer
+StartupNotify=true
+StartupWMClass=io.github.OscarGR5.MusicPlayer
+DBusActivatable=false
+X-MusicPlayer-Managed=true

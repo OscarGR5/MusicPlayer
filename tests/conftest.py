@@ -1,3 +1,4 @@
+import os
 import math
 import struct
 import wave
@@ -78,3 +79,11 @@ def long_wav_file(wav_file, tmp_path):
         output.setparams(params)
         output.writeframes(frames * 12)
     return path
+
+
+@pytest.fixture(autouse=True)
+def isolate_desktop_media_controls(monkeypatch):
+    # Normal tests must never register a player on the user's desktop bus.
+    # MPRIS integration cases run in a separate dbus-run-session subprocess.
+    if os.environ.get('MUSICPLAYER_ISOLATED_DBUS') != '1':
+        monkeypatch.setattr('music_player.mpris.MprisService.start', lambda *_: None)

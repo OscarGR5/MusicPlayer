@@ -19,6 +19,7 @@ class PlaybackController:
                  clock=time.monotonic, wall_clock=utc_now, zone=None):
         self.database = database
         self.on_change = on_change
+        self._listeners = []
         self.history = ListeningTracker(database, clock, wall_clock, zone)
         try:
             self.audio = audio_factory(lambda text: None, self._audio_event)
@@ -57,8 +58,46 @@ class PlaybackController:
         value = self.audio.duration
         return value or (self.current.duration if self.current and self.current.duration > 0 else None)
 
+    def add_listener(self, callback):
+        self._listeners.append(callback)
+
+    def remove_listener(self, callback):
+        if callback in self._listeners:
+            self._listeners.remove(callback)
+
     def _notify(self, event):
         self.on_change(event)
+        for callback in tuple(self._listeners):
+            callback(event)
+
+    @property
+    def can_play(self):
+        return self.current is not None and (self.state in ('playing', 'paused', 'buffering', 'loading') or
+                                            self._available(self.current))
+
+    @property
+    def can_seek(self):
+        return self.current is not None and self.audio.can_seek
+
+    @property
+    def can_go_next(self):
+        if self.current is None:
+            return False
+        candidates = self._played[self._history_position + 1:] + self.order[self.order_position + 1:]
+        if self.repeat == 'all':
+            candidates += self.order
+        return any(self._available(self.queue[index]) for index in candidates)
+
+    @property
+    def can_go_previous(self):
+        if self.current is None:
+            return False
+        if self.position > 3:
+            return self.can_seek
+        candidates = self._played[:self._history_position]
+        if not self.shuffle:
+            candidates += list(range(self.current_index))
+        return self.can_seek or any(self._available(self.queue[index]) for index in candidates)
 
     def _sample(self):
         state = self.state if not self.audio.seeking else 'seeking'
@@ -226,7 +265,12 @@ class PlaybackController:
         self._notify('modes')
 
     def cycle_repeat(self):
-        self.repeat = {'off': 'all', 'all': 'one', 'one': 'off'}[self.repeat]
+        self.set_repeat({'off': 'all', 'all': 'one', 'one': 'off'}[self.repeat])
+
+    def set_repeat(self, value):
+        if value not in ('off', 'all', 'one'):
+            raise ValueError('Invalid repeat mode.')
+        self.repeat = value
         self._notify('modes')
 
     def seek(self, seconds):
@@ -270,7 +314,7 @@ class PlaybackController:
             return
         if event == 'seeked':
             self._sample()
-            self._notify('progress')
+            self._notify('seeked' if detail is not False else 'progress')
             return
         if event == 'eos':
             self._sample()

@@ -10,6 +10,8 @@ from test_history import Clock
 
 
 class FakeAudio:
+    can_seek = True
+
     def __init__(self, status, event):
         self.event = event
         self.path = None
