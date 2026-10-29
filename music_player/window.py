@@ -26,7 +26,7 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         self.set_size_request(720, 400)
         self._closed = False
         self._chooser = None
-        self._chooser_cancel = None
+        self._chooser_response_id = None
         self.scanner = None
         self._items = {}
         self._query = ""
@@ -416,32 +416,45 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
             self._show_status(f"Error: {exc}")
 
     def _open_file(self, button):
-        if self._chooser is not None:
+        if self._closed or self._chooser is not None:
             return
-        self._chooser = Gtk.FileDialog(title='Select local audio', accept_label='Open')
-        self._chooser_cancel = Gio.Cancellable()
-        self._chooser.open(self, self._chooser_cancel, self._file_response)
+        # Temporary GTK4 compatibility fallback. FileDialog's portal backend
+        # can finish exporting the parent handle after cancellation/destruction
+        # (GTK 4.22.5, Wayland). FileChooserDialog is deprecated since 4.10 but
+        # stays in-process and has an application-owned destruction lifecycle.
+        # See PORTAL_SHUTDOWN_INVESTIGATION.md before restoring FileDialog.
+        chooser = Gtk.FileChooserDialog(title='Select local audio', transient_for=self,
+                                        modal=True, destroy_with_parent=True,
+                                        action=Gtk.FileChooserAction.OPEN)
+        chooser.add_buttons('_Cancel', Gtk.ResponseType.CANCEL, '_Open', Gtk.ResponseType.ACCEPT)
+        chooser.set_default_response(Gtk.ResponseType.ACCEPT)
+        self._chooser = chooser
+        self._chooser_response_id = chooser.connect('response', self._file_response)
+        chooser.present()
 
-    def _file_response(self, chooser, result):
+    def _dismiss_file_chooser(self):
+        chooser = self._chooser
+        if chooser is not None:
+            self._chooser = None
+            chooser.disconnect(self._chooser_response_id)
+            self._chooser_response_id = None
+            chooser.destroy()
+
+    def _file_response(self, chooser, response):
+        if self._closed or chooser is not self._chooser:
+            return
         try:
-            file = chooser.open_finish(result)
-            if self._closed:
+            if response != Gtk.ResponseType.ACCEPT:
                 return
+            file = chooser.get_file()
             path = file.get_path() if file is not None else None
             if path is None:
                 raise ValueError("Only local files are supported.")
             self.controller.open_file(path)
-        except GLib.Error as exc:
-            cancelled = any(exc.matches(Gtk.DialogError.quark(), code)
-                            for code in (Gtk.DialogError.CANCELLED, Gtk.DialogError.DISMISSED))
-            if not self._closed and not cancelled:
-                self._show_status(f"Error: {exc.message}")
-        except (OSError, sqlite3.Error, ValueError, RuntimeError) as exc:
-            if not self._closed:
-                self._show_status(f"Error: {exc}")
+        except (GLib.Error, OSError, sqlite3.Error, ValueError, RuntimeError) as exc:
+            self._show_status(f"Error: {exc}")
         finally:
-            if self._chooser is chooser:
-                self._chooser = self._chooser_cancel = None
+            self._dismiss_file_chooser()
 
     def close_player(self):
         if self._closed:
@@ -461,9 +474,7 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         self.statistics.close()
         if self.scanner is not None:
             self.scanner.close()
-        if self._chooser_cancel is not None:
-            self._chooser_cancel.cancel()
-            self._chooser = self._chooser_cancel = None
+        self._dismiss_file_chooser()
         self.controller.close()
 
     def _on_close(self, window):

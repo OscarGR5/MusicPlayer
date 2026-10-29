@@ -174,67 +174,116 @@ def test_pending_seek_is_cancelled_when_playback_ends(library, dragging, termina
         assert bar._seek_source is None
 
 
-def test_file_dialog_cancel_open_and_close_cleanup(library, monkeypatch):
-    # Exercise asynchronous ownership without driving the user's portal. The
-    # native pre-presentation shutdown case has a separate standalone reproducer.
-    pending = []
-    monkeypatch.setattr(Gtk.FileDialog, 'open', lambda dialog, parent, cancel, callback:
-                        pending.append((dialog, cancel, callback)))
+def test_file_chooser_cancel_reopen_browse_and_play(library, tmp_path, long_wav_file):
+    import hashlib
 
-    def cancelled(dialog, result):
-        raise GLib.Error.new_literal(Gtk.DialogError.quark(), 'Cancelled', Gtk.DialogError.CANCELLED)
+    # Browse outside the library, using a real chooser and a generated file.
+    folder = tmp_path / 'Other audio'
+    folder.mkdir()
+    audio = folder / 'local tone # café.wav'
+    shutil.copyfile(long_wav_file, audio)
+    before = (hashlib.sha256(audio.read_bytes()).digest(), audio.stat())
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        status = window._status.get_text()
+        window._open_file(None)
+        chooser = window._chooser
+        assert isinstance(chooser, Gtk.FileChooserDialog)
+        assert chooser.get_transient_for() is window
+        assert chooser.get_modal()
+        wait_for(chooser.get_mapped)
+        for _ in range(10):
+            window._open_file(None)
+            assert window._chooser is chooser
+        chooser.response(Gtk.ResponseType.CANCEL)
+        assert window._chooser is None
+        assert not chooser.get_visible()
+        assert window._status.get_text() == status
+        assert window.controller.current is None
+        window._open_file(None)
+        chooser = window._chooser
+        wait_for(chooser.get_mapped)
+        assert chooser.set_current_folder(Gio.File.new_for_path(str(folder)))
+        wait_for(lambda: chooser.get_current_folder() is not None and
+                 chooser.get_current_folder().get_path() == str(folder))
+        assert chooser.set_file(Gio.File.new_for_path(str(audio)))
+        wait_for(lambda: chooser.get_file() is not None and
+                 chooser.get_file().get_path() == str(audio))
+        chooser.response(Gtk.ResponseType.ACCEPT)
+        wait_for(lambda: window._chooser is None and window.controller.state == 'playing')
+        assert window.player.path == audio
+        assert window.controller.current_song_id is None  # external-file integration
+        after = (hashlib.sha256(audio.read_bytes()).digest(), audio.stat())
+        assert after[0] == before[0]
+        assert after[1].st_size == before[1].st_size
+        assert after[1].st_mtime_ns == before[1].st_mtime_ns
 
-    monkeypatch.setattr(Gtk.FileDialog, 'open_finish', cancelled)
+
+@pytest.mark.parametrize('mapped', [False, True])
+def test_file_chooser_close_during_repeated_requests(library, mapped, monkeypatch):
     with open_window() as window:
         wait_for(lambda: not window.scanner.running)
         window._open_file(None)
         chooser = window._chooser
-        assert isinstance(chooser, Gtk.FileDialog)
-        window._open_file(None)
-        assert window._chooser is chooser
-        assert len(pending) == 1
-        window._chooser_cancel.cancel()
-        pending[0][2](chooser, None)
-        assert window._chooser is None
-        window._open_file(None)
-        chooser = window._chooser
-        cancellation = window._chooser_cancel
-        window.close()
-        assert window._chooser is None
-        assert cancellation.is_cancelled()
-
-
-def test_file_dialog_result_errors_and_late_results_after_close(library, monkeypatch):
-    class Result:
-        def __init__(self, value):
-            self.value = value
-
-        def open_finish(self, result):
-            if isinstance(self.value, Exception):
-                raise self.value
-            return self.value
-
-    with open_window() as window:
-        wait_for(lambda: not window.scanner.running)
-        song = window.sorted.get_item(0).song
-        window._file_response(Result(Gio.File.new_for_path(song.path)), None)
-        wait_for(lambda: window.controller.state == 'playing')
-        assert window.controller.current_song_id == song.id
-        before = window._status.get_text()
-        for code in (Gtk.DialogError.CANCELLED, Gtk.DialogError.DISMISSED):
-            error = GLib.Error.new_literal(Gtk.DialogError.quark(), 'Cancelled', code)
-            window._file_response(Result(error), None)
-            assert window._status.get_text() == before
-        window._file_response(Result(Gio.File.new_for_uri('https://example.com/audio.wav')), None)
-        assert 'Only local files' in window._status.get_text()
-        error = GLib.Error.new_literal(Gtk.DialogError.quark(), 'Chooser failed', Gtk.DialogError.FAILED)
-        window._file_response(Result(error), None)
-        assert 'Chooser failed' in window._status.get_text()
+        if mapped:
+            wait_for(chooser.get_mapped)
+        for _ in range(30):
+            window._open_file(None)
+            assert window._chooser is chooser
         opened = []
         monkeypatch.setattr(window.controller, 'open_file', opened.append)
         window.close()
-        window._file_response(Result(Gio.File.new_for_path(song.path)), None)
+        assert window._chooser is None
+        assert window._chooser_response_id is None
+        assert not chooser.get_visible()
+        window._file_response(chooser, Gtk.ResponseType.ACCEPT)
+        window._open_file(None)
+        assert window._chooser is None
         assert not opened
+        assert not any(isinstance(item, Gtk.FileChooserDialog)
+                       for item in Gtk.Window.get_toplevels())
+
+
+def test_file_chooser_repeated_cancel_and_window_close(library):
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        for iteration in range(12):
+            window._open_file(None)
+            chooser = window._chooser
+            wait_for(chooser.get_mapped)
+            if iteration % 2:
+                chooser.close()
+            else:
+                chooser.response(Gtk.ResponseType.CANCEL)
+            wait_for(lambda: window._chooser is None)
+            assert not chooser.get_visible()
+        assert not any(isinstance(item, Gtk.FileChooserDialog)
+                       for item in Gtk.Window.get_toplevels())
+
+
+def test_file_chooser_errors_and_stale_responses(library, monkeypatch):
+    with open_window() as window:
+        wait_for(lambda: not window.scanner.running)
+        window._open_file(None)
+        old = window._chooser
+        old.response(Gtk.ResponseType.CANCEL)
+        window._open_file(None)
+        chooser = window._chooser
+        window._file_response(old, Gtk.ResponseType.CANCEL)
+        assert window._chooser is chooser
+        monkeypatch.setattr(chooser, 'get_file', lambda: Gio.File.new_for_uri('https://example.com/audio.wav'))
+        window._file_response(chooser, Gtk.ResponseType.ACCEPT)
+        assert 'Only local files' in window._status.get_text()
+        assert window._chooser is None
+        window._open_file(None)
+        chooser = window._chooser
+        monkeypatch.setattr(chooser, 'get_file', lambda: Gio.File.new_for_path(library[0].path))
+        def fail(_):
+            raise ValueError('Could not read audio')
+        monkeypatch.setattr(window.controller, 'open_file', fail)
+        window._file_response(chooser, Gtk.ResponseType.ACCEPT)
+        assert 'Could not read audio' in window._status.get_text()
+        assert window._chooser is None
 
 
 @pytest.mark.parametrize('size', [(1040, 640), (720, 480)])
