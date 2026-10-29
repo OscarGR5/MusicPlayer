@@ -3,10 +3,12 @@
 Phase 7, October 29, 2026. Base: `79974f86297c4b5f80b876c326f0fe923a5ca213`.
 Local and fetched remote `main` matched that Phase 6 merge before changes.
 
-**Keep PR #6 draft and unmerged; do not release.** The GTK portal shutdown
-blocker is avoided by a validated temporary application-owned chooser. The
-underlying GTK-only native reproducer still crashes. Physical desktop checks
-remain open. See [PORTAL_SHUTDOWN_INVESTIGATION.md](PORTAL_SHUTDOWN_INVESTIGATION.md)
+**Historical verification record.** Phase 7 and the subsequent fixes are now
+merged. The user has confirmed the interface works on Fedora GNOME/Wayland.
+v0.7.0 is being prepared for review; publication is not authorized. The upstream
+GTK portal issue remains unresolved, and the validated application-owned chooser
+avoids the failing path. The physical-input caveats below describe the scope of
+the original automated checks. See [PORTAL_SHUTDOWN_INVESTIGATION.md](PORTAL_SHUTDOWN_INVESTIGATION.md)
 for the exact environment, comparison matrix, backtraces, and restoration criteria.
 
 ## Audit findings
@@ -126,8 +128,8 @@ Warnings are not suppressed. These warnings are separate from the native portal 
 
 ## Manual desktop checklist
 
-After the release blocker is resolved, use the documented optional installer
-only when you choose to install into your profile:
+This checklist records the original manual verification scope. Use the optional
+installer only when you choose to install into your profile:
 
 1. Launch from GNOME search and another working directory. Check the icon and
    that another launch presents the same window; move the checkout, reinstall,

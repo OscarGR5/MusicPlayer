@@ -2,7 +2,7 @@
 Name=MusicPlayer
 Comment=Lightweight local music player
 Type=Application
-Categories=Audio;Music;Player;
+Categories=AudioVideo;Audio;Music;Player;
 Terminal=false
 Exec=@EXEC@
 TryExec=@PYTHON@
