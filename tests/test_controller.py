@@ -294,3 +294,23 @@ def test_checkpoint_error_clears_after_successful_retry(controller, indexed_song
         assert player.message == 'Playing'
     finally:
         lock.close()
+
+
+def test_saved_order_start_skips_missing_preserves_modes_and_empty_is_noop(controller, indexed_songs):
+    player, clock, events = controller
+    player.activate(indexed_songs)
+    previous_queue = player.queue
+    assert not player.play_queue([])
+    assert player.queue == previous_queue
+    unavailable = [replace(song, available=False) for song in indexed_songs]
+    assert not player.play_queue(unavailable)
+    assert player.queue == previous_queue
+    Path(indexed_songs[1].path).unlink()
+    saved = [replace(indexed_songs[0], available=False), indexed_songs[1], indexed_songs[3], indexed_songs[2]]
+    player.toggle_shuffle()
+    player.cycle_repeat()
+    player.cycle_repeat()
+    assert player.play_queue(saved)
+    assert player.queue == tuple(saved)
+    assert player.current_song_id == indexed_songs[3].id
+    assert player.shuffle and player.repeat == 'one'

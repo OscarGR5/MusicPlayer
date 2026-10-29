@@ -96,6 +96,15 @@ class PlaybackController:
     def _available(song):
         return song.available and Path(song.path).is_file() and os.access(song.path, os.R_OK)
 
+    def play_queue(self, songs):
+        """Start saved order at its first playable entry, preserving mode settings."""
+        snapshot = tuple(songs)
+        first = next((index for index, song in enumerate(snapshot) if self._available(song)), None)
+        if first is None:
+            return False
+        self.activate(snapshot, first)
+        return True
+
     def _switch(self, index, playing, *, record=True, reason='switch'):
         song = self.queue[index]
         if not self._available(song):
