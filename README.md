@@ -139,13 +139,20 @@ adds the selected songs as part of the same transaction.
 Choose a playlist in the sidebar to browse its saved order. Its heading shows
 the name, total membership count, and a **Play** button. Search applies only to
 that playlist. The playlist Play button starts the first available track in
-saved order, independently of a search filter. Double-clicking a song instead
-starts a queue from the currently visible, filtered playlist. Both reuse the
-existing shuffle/repeat settings and permanent player bar.
+saved order, independently of temporary sorting or a search filter.
+Double-clicking a song instead starts a queue from the currently visible,
+sorted and filtered playlist. Both reuse the existing shuffle/repeat settings
+and permanent player bar.
 
-Playlist columns do not apply temporary sorting. Select exactly one song and
-use **Move Up** or **Move Down** from its context menu to change saved order;
-the actions are disabled at the corresponding saved-order boundaries. With a
+Click **Title**, **Artist**, **Album**, or **Duration** to sort a playlist
+temporarily; click again to reverse the direction. Duration sorts numerically.
+The **Saved order** button appears while sorted and restores the saved order
+without clearing search. Sorting keeps selected song IDs and never writes the
+playlist order to the database. Opening a playlist always shows saved order.
+
+In saved order, select exactly one song and use **Move Up** or **Move Down**
+from its context menu to change saved order. These actions are disabled while
+temporarily sorted and at the corresponding saved-order boundaries. With a
 search active, moving still operates on the full saved order. Select one or
 more songs and choose **Remove from Playlist** to remove memberships. No music
 file or All Songs record is deleted. All Songs retains its column sorting.
