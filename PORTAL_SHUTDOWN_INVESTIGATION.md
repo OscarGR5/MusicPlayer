@@ -181,5 +181,7 @@ GDK_BACKEND=wayland .venv/bin/python -m pytest -q
 Results are also recorded in `RELEASE_VERIFICATION.md`. Automated GTK calls drive the
 real browse, selection, cancel, and close paths; they do not certify physical
 mouse/keyboard input, audible output, or GNOME focus behavior. No X11 or older
-GTK compatibility result is claimed by this Fedora follow-up. PR #6 must remain
-draft and unmerged; no release is authorized.
+GTK compatibility result is claimed by this Fedora follow-up. Phase 7 and its
+follow-up fixes have since merged, and the user has confirmed the interface works
+on Fedora GNOME/Wayland. v0.7.0 preparation does not authorize
+a release; the upstream GTK issue remains unresolved.
