@@ -144,7 +144,8 @@ class MusicPlayerWindow(Gtk.ApplicationWindow):
         self._all_sort_order = Gtk.SortType.ASCENDING
         self.sorted.set_sorter(self.view.get_sorter())
         self.view.sort_by_column(self._title_column, Gtk.SortType.ASCENDING)
-        scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True,
+                                      margin_end=12, overlay_scrolling=False)
         scroller.set_child(self.view)
         overlay = Gtk.Overlay(child=scroller)
         self._empty = Gtk.Label(label="Scanning your music folder…", justify=Gtk.Justification.CENTER,
